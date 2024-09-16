@@ -1,0 +1,3 @@
+([('ffmpeg_converter',
+   '/Users/georgeantonopoulos/Dev/ffmpeg_convert/dist/ffmpeg_converter',
+   'EXECUTABLE')],)
