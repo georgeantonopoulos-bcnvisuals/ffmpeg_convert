@@ -1,0 +1,21 @@
+ name: ffmpeg-converter
+   version: '1.0'
+   summary: FFmpeg EXR Converter
+   description: |
+     A GUI tool to convert EXR sequences using FFmpeg.
+
+   grade: stable
+   confinement: strict
+
+   apps:
+     ffmpeg-converter:
+       command: bin/ffmpeg-converter
+       plugs: [home, x11, wayland]
+
+   parts:
+     ffmpeg-converter:
+       plugin: python
+       source: .
+       stage-packages:
+         - ffmpeg
+         - python3-pyqt5
