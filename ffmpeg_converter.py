@@ -4,6 +4,12 @@ import glob
 from PyQt5 import QtWidgets, QtGui, QtCore
 import subprocess
 
+from PyQt5.QtCore import QT_VERSION_STR
+from PyQt5.Qt import PYQT_VERSION_STR
+
+print(f"Qt version: {QT_VERSION_STR}")
+print(f"PyQt version: {PYQT_VERSION_STR}")
+
 class FFmpegConverter(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
