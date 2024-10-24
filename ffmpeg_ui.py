@@ -13,7 +13,7 @@ class FFmpegUI:
         self.root = root
         self.root.title("FFmpeg GUI")
         self.root.configure(bg='#2b2b2b')
-        self.root.geometry("800x600")  # Set initial window size
+        self.root.geometry("800x700")  # Increased height to accommodate new label
         self.root.minsize(600, 400)  # Set minimum window size
 
         # Custom font
@@ -36,16 +36,16 @@ class FFmpegUI:
         except tk.TclError as e:
             print(f"Error loading TCL files: {e}")
             # Fallback to basic styling if TCL files fail to load
-            self.style.configure(".", 
-                                 background="#2b2b2b", 
-                                 foreground="#ffffff", 
-                                 fieldbackground="#3c3f41", 
+            self.style.configure(".",
+                                 background="#2b2b2b",
+                                 foreground="#ffffff",
+                                 fieldbackground="#3c3f41",
                                  font=self.custom_font)
         
         # Button style with outline and round edges
-        self.style.configure("TButton", 
-                             padding=6, 
-                             relief="flat", 
+        self.style.configure("TButton",
+                             padding=6,
+                             relief="flat",
                              background="#3c3f41",
                              borderwidth=1,
                              bordercolor="#ffffff",
@@ -56,7 +56,7 @@ class FFmpegUI:
 
         # Configure grid
         self.root.grid_columnconfigure(1, weight=1)
-        for i in range(9):
+        for i in range(12):  # Increased range to accommodate new widgets
             self.root.grid_rowconfigure(i, weight=1)
 
         # Load last used input folder
@@ -79,42 +79,52 @@ class FFmpegUI:
         self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_444"], state="readonly")
         self.codec_dropdown.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
+        self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_duration)  # Added binding to update duration
 
         # Frame Rate Selection
-        ttk.Label(root, text="Frame Rate:", font=self.title_font).grid(row=3, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Frame Rate (fps):", font=self.title_font).grid(row=3, column=0, sticky="w", padx=10, pady=5)
         self.frame_rate = ttk.Entry(root)
         self.frame_rate.insert(0, "60")
         self.frame_rate.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
+
+        # Desired Duration Input (Added)
+        ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        self.desired_duration = ttk.Entry(root)
+        self.desired_duration.insert(0, "15")
+        self.desired_duration.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.desired_duration.bind("<KeyRelease>", self.update_duration)  # Update duration on duration change
 
         # Output File Name
-        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
         self.output_filename = ttk.Entry(root)
         self.output_filename.insert(0, "output.mp4")
-        self.output_filename.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.output_filename.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
         # Output Folder Selection
-        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
         self.output_folder = ttk.Entry(root)
-        self.output_folder.grid(row=5, column=1, sticky="ew", padx=10, pady=5)
-        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=5, column=2, padx=10, pady=5)
+        self.output_folder.grid(row=6, column=1, sticky="ew", padx=10, pady=5)
+        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=6, column=2, padx=10, pady=5)
 
         # Run Button
-        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=6, column=1, pady=20)
+        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=7, column=1, pady=20)
 
         # Codec-specific options frame
         self.codec_specific_frame = ttk.Frame(root)
-        self.codec_specific_frame.grid(row=7, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.codec_specific_frame.grid(row=8, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
 
         # Progress Bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(root, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.grid(row=8, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
+        self.progress_bar.grid(row=9, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
 
         # Status Label
         self.status_label = ttk.Label(root, text="", font=self.custom_font)
-        self.status_label.grid(row=9, column=0, columnspan=3, padx=10, pady=(5,20))
+        self.status_label.grid(row=10, column=0, columnspan=3, padx=10, pady=(5,20))
 
         self.update_codec()
+        self.update_duration()  # Initialize duration
 
     def browse_img_seq(self):
         current_dir = self.img_seq_folder.get()
@@ -130,6 +140,7 @@ class FFmpegUI:
             self.update_filename_pattern(folder)
             self.save_last_input_folder(folder)
             self.update_output_folder(folder)
+            self.update_duration()  # Update duration after selecting new folder
 
     def update_filename_pattern(self, folder):
         try:
@@ -148,17 +159,30 @@ class FFmpegUI:
                     self.filename_pattern.insert(0, pattern)
                     
                     self.frame_range = (first_frame, last_frame)
+                    self.total_frames = len(collection.indexes)  # Store total frames
                     
+                    # Update duration
+                    self.update_duration()
+
                     # Update output filename without extension and remove trailing dots or underscores
                     output_name = collection.head.rstrip('_.')
                     self.output_filename.delete(0, tk.END)
                     self.output_filename.insert(0, output_name)
                 else:
                     messagebox.showwarning("Warning", "No image sequence found in the selected folder.")
+                    self.total_frames = 0
+                    self.desired_duration.delete(0, tk.END)
+                    self.desired_duration.insert(0, "0")
             else:
                 messagebox.showwarning("Warning", "No image files found in the selected folder.")
+                self.total_frames = 0
+                self.desired_duration.delete(0, tk.END)
+                self.desired_duration.insert(0, "0")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to update filename pattern: {e}")
+            self.total_frames = 0
+            self.desired_duration.delete(0, tk.END)
+            self.desired_duration.insert(0, "0")
 
     def update_output_folder(self, input_folder):
         output_folder = os.path.dirname(input_folder)
@@ -206,12 +230,46 @@ class FFmpegUI:
             self.prores_qscale = ttk.Entry(self.codec_specific_frame, width=10)
             self.prores_qscale.insert(0, "9")  # Default value
             self.prores_qscale.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        self.update_duration()  # Update duration when codec changes
+
+    def update_duration(self, event=None):
+        # This method now calculates the scale factor based on desired duration and frame rate
+        if hasattr(self, 'total_frames') and self.total_frames > 0:
+            try:
+                frame_rate = float(self.frame_rate.get())
+                desired_duration = float(self.desired_duration.get())
+                if frame_rate <= 0 or desired_duration <= 0:
+                    raise ValueError
+                scale_factor = desired_duration * frame_rate / self.total_frames
+                self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
+                # Optionally, update a label or status to show scale factor
+            except ValueError:
+                self.scale_factor = None
+                # Optionally, display an error message or indicator
+        else:
+            self.scale_factor = None
 
     def run_ffmpeg(self):
         img_folder = self.img_seq_folder.get()
         pattern = self.filename_pattern.get()
         codec = self.codec_var.get()
-        framerate = self.frame_rate.get()
+        try:
+            framerate = float(self.frame_rate.get())
+            if framerate <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid frame rate.")
+            return
+
+        try:
+            desired_duration = float(self.desired_duration.get())
+            if desired_duration <= 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid desired duration.")
+            return
+
         output_file = self.output_filename.get().strip()
         output_dir = self.output_folder.get()
 
@@ -235,7 +293,7 @@ class FFmpegUI:
         output_file = f"{output_file_base}{file_extension}"
 
         # Use the frame range information
-        if hasattr(self, 'frame_range'):
+        if hasattr(self, 'frame_range') and self.total_frames > 0:
             start_frame, end_frame = self.frame_range
             # Ensure the pattern has only one '%0' by replacing '%00' with '%0'
             input_pattern = re.sub(r'%0+', '%0', pattern)
@@ -280,11 +338,19 @@ class FFmpegUI:
             messagebox.showerror("Error", "Unsupported codec selected.")
             return
 
-        # Base ffmpeg command
+        # Calculate scale factor
+        if hasattr(self, 'scale_factor') and self.scale_factor is not None:
+            setpts_filter = f"setpts={self.scale_factor}*PTS"
+            ffmpeg_filters = setpts_filter
+            ffmpeg_filter_args = ["-vf", ffmpeg_filters]
+        else:
+            ffmpeg_filter_args = []
+
+        # Base ffmpeg command with setpts filter if applicable
         cmd = [
             "ffmpeg",
-            "-framerate", framerate
-        ] + input_args + [
+            "-framerate", str(framerate)
+        ] + input_args + ffmpeg_filter_args + [
             "-pix_fmt", "yuv420p",
             "-an"
         ] + codec_params + [
