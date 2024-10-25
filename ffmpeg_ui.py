@@ -123,6 +123,16 @@ class FFmpegUI:
         self.status_label = ttk.Label(root, text="", font=self.custom_font)
         self.status_label.grid(row=10, column=0, columnspan=3, padx=10, pady=(5,20))
 
+        # FFmpeg Output Text Widget
+        self.output_text = tk.Text(root, height=10, width=80, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff')
+        self.output_text.grid(row=11, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
+        self.output_scrollbar = ttk.Scrollbar(root, orient='vertical', command=self.output_text.yview)
+        self.output_scrollbar.grid(row=11, column=3, sticky='ns')
+        self.output_text['yscrollcommand'] = self.output_scrollbar.set
+
+        # Configure the new row to expand
+        root.grid_rowconfigure(11, weight=1)
+
         self.update_codec()
         self.update_duration()  # Initialize duration
 
@@ -256,19 +266,18 @@ class FFmpegUI:
         codec = self.codec_var.get()
         try:
             framerate = float(self.frame_rate.get())
-            if framerate <= 0:
+            desired_duration = float(self.desired_duration.get())
+            if framerate <= 0 or desired_duration <= 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Error", "Please enter a valid frame rate.")
+            messagebox.showerror("Error", "Please enter valid frame rate and desired duration.")
             return
 
-        try:
-            desired_duration = float(self.desired_duration.get())
-            if desired_duration <= 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Error", "Please enter a valid desired duration.")
-            return
+        # Calculate the exact number of frames needed for the desired duration
+        total_frames_needed = int(round(desired_duration * framerate))
+        
+        # Calculate the actual duration based on the rounded number of frames
+        actual_duration = total_frames_needed / framerate
 
         output_file = self.output_filename.get().strip()
         output_dir = self.output_folder.get()
@@ -295,7 +304,6 @@ class FFmpegUI:
         # Use the frame range information
         if hasattr(self, 'frame_range') and self.total_frames > 0:
             start_frame, end_frame = self.frame_range
-            # Ensure the pattern has only one '%0' by replacing '%00' with '%0'
             input_pattern = re.sub(r'%0+', '%0', pattern)
             input_path = os.path.join(img_folder, input_pattern)
             input_args = [
@@ -338,50 +346,68 @@ class FFmpegUI:
             messagebox.showerror("Error", "Unsupported codec selected.")
             return
 
-        # Calculate scale factor
-        if hasattr(self, 'scale_factor') and self.scale_factor is not None:
-            setpts_filter = f"setpts={self.scale_factor}*PTS"
-            ffmpeg_filters = setpts_filter
-            ffmpeg_filter_args = ["-vf", ffmpeg_filters]
-        else:
-            ffmpeg_filter_args = []
+        # Calculate scale factor based on the exact number of frames needed
+        scale_factor = total_frames_needed / self.total_frames
 
-        # Base ffmpeg command with setpts filter if applicable
+        # Use the exact scale factor in the setpts filter
+        setpts_filter = f"setpts={scale_factor}*PTS"
+        ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+
+        ffmpeg_filter_args = ["-vf", ffmpeg_filters]
+
+        # Add -frames:v argument to limit the number of output frames
+        frames_arg = ["-frames:v", str(total_frames_needed)]
+
+        # Color space settings
+        color_space_args = [
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-colorspace", "bt709"
+        ]
+
+        # Base ffmpeg command with setpts filter and frame limit
         cmd = [
             "ffmpeg",
             "-framerate", str(framerate)
-        ] + input_args + ffmpeg_filter_args + [
+        ] + input_args + ffmpeg_filter_args + frames_arg + [
             "-pix_fmt", "yuv420p",
             "-an"
-        ] + codec_params + [
+        ] + codec_params + color_space_args + [
             output_path
         ]
 
         print("FFmpeg command:", " ".join(cmd))
 
         # Execute the ffmpeg command in a separate thread
-        thread = threading.Thread(target=self.execute_ffmpeg, args=(cmd, output_path))
+        thread = threading.Thread(target=self.execute_ffmpeg, args=(cmd, output_path, actual_duration))
         thread.start()
 
-    def execute_ffmpeg(self, cmd, output_path):
+    def execute_ffmpeg(self, cmd, output_path, actual_duration):
         try:
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
             
+            total_frames = self.total_frames
+            start_frame = self.frame_range[0]
+            
             for line in process.stdout:
+                self.output_text.insert(tk.END, line)
+                self.output_text.see(tk.END)
+                self.root.update_idletasks()
+                
                 if "frame=" in line:
                     match = re.search(r'frame=\s*(\d+)', line)
                     if match:
-                        current_frame = int(match.group(1))
-                        progress = (current_frame - self.frame_range[0]) / (self.frame_range[1] - self.frame_range[0]) * 100
+                        current_frame = int(match.group(1)) + start_frame - 1
+                        progress = (current_frame - start_frame + 1) / total_frames * 100
                         self.progress_var.set(progress)
-                        self.status_label.config(text=f"Processing frame {current_frame}")
+                        self.status_label.config(text=f"Processing frame {current_frame} of {start_frame + total_frames - 1}")
                         self.root.update_idletasks()
 
             process.wait()
             if process.returncode == 0:
                 self.progress_var.set(100)
                 self.status_label.config(text="Conversion complete")
-                messagebox.showinfo("Success", f"Video created at {output_path}")
+                messagebox.showinfo("Success", f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds")
             else:
                 raise subprocess.CalledProcessError(process.returncode, cmd)
         except subprocess.CalledProcessError as e:
