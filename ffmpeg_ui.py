@@ -14,7 +14,7 @@ class FFmpegUI:
         self.root.title("FFmpeg GUI")
         self.root.configure(bg='#2b2b2b')
         self.root.geometry("800x700")  # Increased height to accommodate new label
-        self.root.minsize(600, 400)  # Set minimum window size
+        self.root.minsize(600, 400)    # Set minimum window size
 
         # Custom font
         self.custom_font = Font(family="Roboto", size=10)
@@ -79,7 +79,6 @@ class FFmpegUI:
         self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_444"], state="readonly")
         self.codec_dropdown.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
-        self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_duration)  # Added binding to update duration
 
         # Frame Rate Selection
         ttk.Label(root, text="Frame Rate (fps):", font=self.title_font).grid(row=3, column=0, sticky="w", padx=10, pady=5)
@@ -88,7 +87,7 @@ class FFmpegUI:
         self.frame_rate.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
 
-        # Desired Duration Input (Added)
+        # Desired Duration Input
         ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
         self.desired_duration = ttk.Entry(root)
         self.desired_duration.insert(0, "15")
@@ -110,9 +109,40 @@ class FFmpegUI:
         # Run Button
         ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=7, column=1, pady=20)
 
-        # Codec-specific options frame
-        self.codec_specific_frame = ttk.Frame(root)
-        self.codec_specific_frame.grid(row=8, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        # Codec-specific options frames
+        self.h264_h265_frame = ttk.Frame(root)
+        self.h264_h265_frame.grid(row=8, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+
+        self.prores_frame = ttk.Frame(root)
+        self.prores_frame.grid(row=8, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.prores_frame.grid_remove()  # Initially hidden
+
+        # Initialize codec-specific variables
+        self.prores_profile = tk.StringVar()
+        self.prores_qscale = tk.StringVar()
+        self.mp4_bitrate = tk.StringVar()
+        self.mp4_crf = tk.StringVar()
+
+        # Populate h264/h265 settings
+        ttk.Label(self.h264_h265_frame, text="Bitrate (Mbps):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.bitrate_entry = ttk.Entry(self.h264_h265_frame, textvariable=self.mp4_bitrate, width=10)
+        self.bitrate_entry.insert(0, "30")
+        self.bitrate_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+
+        ttk.Label(self.h264_h265_frame, text="CRF:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.crf_entry = ttk.Entry(self.h264_h265_frame, textvariable=self.mp4_crf, width=10)
+        self.crf_entry.insert(0, "23")
+        self.crf_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+
+        # Populate ProRes settings
+        ttk.Label(self.prores_frame, text="ProRes Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.prores_profile_label = ttk.Label(self.prores_frame, text="422")
+        self.prores_profile_label.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+
+        ttk.Label(self.prores_frame, text="Quality (qscale:v):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        self.qscale_entry = ttk.Entry(self.prores_frame, textvariable=self.prores_qscale, width=10)
+        self.qscale_entry.insert(0, "9")
+        self.qscale_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
 
         # Progress Bar
         self.progress_var = tk.DoubleVar()
@@ -133,8 +163,8 @@ class FFmpegUI:
         # Configure the new row to expand
         root.grid_rowconfigure(11, weight=1)
 
+        # Initialize codec-specific UI based on default selection
         self.update_codec()
-        self.update_duration()  # Initialize duration
 
     def browse_img_seq(self):
         current_dir = self.img_seq_folder.get()
@@ -217,30 +247,31 @@ class FFmpegUI:
             self.output_folder.insert(0, folder)
 
     def update_codec(self, event=None):
-        # Clear existing codec-specific options if any
-        for widget in self.codec_specific_frame.winfo_children():
-            widget.destroy()
-        
         codec = self.codec_var.get()
-        if codec == "h264":
-            # Add H.264 specific settings here if needed
-            pass
-        elif codec == "h265":
-            # Add H.265 specific settings here if needed
-            pass
-        elif codec.startswith("prores"):
-            # ProRes specific settings
-            ttk.Label(self.codec_specific_frame, text="ProRes Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-            self.prores_profile = ttk.Entry(self.codec_specific_frame, width=10)
-            self.prores_profile.insert(0, "3" if codec == "prores_422" else "4")
-            self.prores_profile.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        print(f"Selected codec: {codec}")  # Debug statement
 
-            # Add qscale option
-            ttk.Label(self.codec_specific_frame, text="Quality (qscale:v):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-            self.prores_qscale = ttk.Entry(self.codec_specific_frame, width=10)
-            self.prores_qscale.insert(0, "9")  # Default value
-            self.prores_qscale.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
-        
+        if codec in ["h264", "h265"]:
+            self.h264_h265_frame.grid()
+            self.prores_frame.grid_remove()
+            # Set default ProRes values to None
+            self.prores_qscale.set("")
+            self.prores_profile.set("")
+        elif codec.startswith("prores"):
+            self.h264_h265_frame.grid_remove()
+            self.prores_frame.grid()
+            # Set ProRes profile based on selection
+            if codec == "prores_422":
+                self.prores_profile.set("2")  # Standard 422
+                self.prores_profile_label.config(text="422")
+            elif codec == "prores_444":
+                self.prores_profile.set("4")  # 4444
+                self.prores_profile_label.config(text="4444")
+            # Set default ProRes Qscale
+            self.prores_qscale.set("9")
+        else:
+            self.h264_h265_frame.grid_remove()
+            self.prores_frame.grid_remove()
+
         self.update_duration()  # Update duration when codec changes
 
     def update_duration(self, event=None):
@@ -253,6 +284,7 @@ class FFmpegUI:
                     raise ValueError
                 scale_factor = desired_duration * frame_rate / self.total_frames
                 self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
+                print(f"Scale factor updated to: {scale_factor}")  # Debug statement
                 # Optionally, update a label or status to show scale factor
             except ValueError:
                 self.scale_factor = None
@@ -317,26 +349,34 @@ class FFmpegUI:
         output_path = os.path.join(output_dir, output_file)
 
         # Determine the codec parameters
-        if codec == "h265":
+        codec_params = []
+        if codec in ["h264", "h265"]:
+            bitrate = self.mp4_bitrate.get()
+            crf = self.mp4_crf.get()
+            if not bitrate or not crf:
+                messagebox.showerror("Error", "Bitrate and CRF settings are required for H.264/H.265 encoding.")
+                return
+            
+            codec_lib = "libx264" if codec == "h264" else "libx265"
             codec_params = [
-                "-c:v", "libx265",
-                "-tag:v", "hvc1",
+                "-c:v", codec_lib,
                 "-preset", "medium",
-                "-crf", "23"
+                "-crf", crf,
+                "-b:v", f"{bitrate}M",
+                "-maxrate", f"{int(float(bitrate)*2)}M",
+                "-bufsize", f"{int(float(bitrate)*2)}M"
             ]
-        elif codec == "h264":
-            codec_params = [
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-profile:v", "high",
-                "-level:v", "5.1",
-                "-b:v", "30M",
-                "-maxrate", "60M",
-                "-bufsize", "60M"
-            ]
+            if codec == "h264":
+                codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
+            else:  # h265
+                codec_params.extend(["-tag:v", "hvc1"])
         elif codec.startswith("prores"):
             profile = self.prores_profile.get()
             qscale = self.prores_qscale.get()
+            if not profile or not qscale:
+                messagebox.showerror("Error", "ProRes profile and Quality settings are required for ProRes encoding.")
+                return
+            
             codec_params = [
                 "-c:v", "prores_ks",
                 "-profile:v", profile,
@@ -347,7 +387,7 @@ class FFmpegUI:
             return
 
         # Calculate scale factor based on the exact number of frames needed
-        scale_factor = total_frames_needed / self.total_frames
+        scale_factor = total_frames_needed / self.total_frames if self.total_frames else 1
 
         # Use the exact scale factor in the setpts filter
         setpts_filter = f"setpts={scale_factor}*PTS"
@@ -376,7 +416,7 @@ class FFmpegUI:
             output_path
         ]
 
-        print("FFmpeg command:", " ".join(cmd))
+        print("FFmpeg command:", " ".join(cmd))  # Debug statement
 
         # Execute the ffmpeg command in a separate thread
         thread = threading.Thread(target=self.execute_ffmpeg, args=(cmd, output_path, actual_duration))
