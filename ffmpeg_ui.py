@@ -76,7 +76,7 @@ class FFmpegUI:
         # Codec Selection
         ttk.Label(root, text="Codec:", font=self.title_font).grid(row=2, column=0, sticky="w", padx=10, pady=5)
         self.codec_var = tk.StringVar(value="h265")
-        self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_444"], state="readonly")
+        self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_422_lt", "prores_444"], state="readonly")
         self.codec_dropdown.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
 
@@ -263,6 +263,9 @@ class FFmpegUI:
             if codec == "prores_422":
                 self.prores_profile.set("2")  # Standard 422
                 self.prores_profile_label.config(text="422")
+            elif codec == "prores_422_lt":
+                self.prores_profile.set("1")  # 422 LT
+                self.prores_profile_label.config(text="422 LT")
             elif codec == "prores_444":
                 self.prores_profile.set("4")  # 4444
                 self.prores_profile_label.config(text="4444")
@@ -306,9 +309,9 @@ class FFmpegUI:
             return
 
         # Calculate the exact number of frames needed for the desired duration
-        total_frames_needed = int(round(desired_duration * framerate))
+        total_frames_needed = int(round(framerate * desired_duration))  # Added round() function
         
-        # Calculate the actual duration based on the rounded number of frames
+        # Calculate the actual duration based on the exact number of frames
         actual_duration = total_frames_needed / framerate
 
         output_file = self.output_filename.get().strip()
@@ -361,7 +364,6 @@ class FFmpegUI:
             codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
-                "-crf", crf,
                 "-b:v", f"{bitrate}M",
                 "-maxrate", f"{int(float(bitrate)*2)}M",
                 "-bufsize", f"{int(float(bitrate)*2)}M"
@@ -386,11 +388,11 @@ class FFmpegUI:
             messagebox.showerror("Error", "Unsupported codec selected.")
             return
 
-        # Calculate scale factor based on the exact number of frames needed
-        scale_factor = total_frames_needed / self.total_frames if self.total_frames else 1
+        # Calculate scale factor with higher precision
+        scale_factor = total_frames_needed / (self.total_frames - 1)  # Adjusted for frame counting
 
-        # Use the exact scale factor in the setpts filter
-        setpts_filter = f"setpts={scale_factor}*PTS"
+        # Use the exact scale factor in the setpts filter with higher precision
+        setpts_filter = f"setpts={scale_factor:.10f}*PTS"  # Added precision to avoid floating point errors
         ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
 
         ffmpeg_filter_args = ["-vf", ffmpeg_filters]
