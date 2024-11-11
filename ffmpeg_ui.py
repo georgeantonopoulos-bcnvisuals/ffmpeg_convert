@@ -76,7 +76,7 @@ class FFmpegUI:
         # Codec Selection
         ttk.Label(root, text="Codec:", font=self.title_font).grid(row=2, column=0, sticky="w", padx=10, pady=5)
         self.codec_var = tk.StringVar(value="h265")
-        self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_422_lt", "prores_444"], state="readonly")
+        self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_422_lt", "prores_444", "qtrle"], state="readonly")
         self.codec_dropdown.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
 
@@ -271,6 +271,14 @@ class FFmpegUI:
                 self.prores_profile_label.config(text="4444")
             # Set default ProRes Qscale
             self.prores_qscale.set("9")
+        elif codec == "qtrle":
+            self.h264_h265_frame.grid_remove()
+            self.prores_frame.grid_remove()
+            # Set qtrle codec parameters
+            codec_params = [
+                "-c:v", "qtrle",
+                "-pix_fmt", "rgb24"  # Use rgb24 for Animation codec
+            ]
         else:
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid_remove()
@@ -383,6 +391,11 @@ class FFmpegUI:
                 "-c:v", "prores_ks",
                 "-profile:v", profile,
                 "-qscale:v", qscale
+            ]
+        elif codec == "qtrle":
+            codec_params = [
+                "-c:v", "qtrle",
+                "-pix_fmt", "rgb24"  # Use rgb24 for Animation codec
             ]
         else:
             messagebox.showerror("Error", "Unsupported codec selected.")
