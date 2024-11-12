@@ -7,6 +7,7 @@ import clique
 import json
 import threading
 from tkinter.font import Font
+import queue
 
 class FFmpegUI:
     def __init__(self, root):
@@ -15,6 +16,9 @@ class FFmpegUI:
         self.root.configure(bg='#2b2b2b')
         self.root.geometry("800x700")  # Increased height to accommodate new label
         self.root.minsize(600, 400)    # Set minimum window size
+
+        # Initialize the queue for thread-safe communication
+        self.queue = queue.Queue()
 
         # Custom font
         self.custom_font = Font(family="Roboto", size=10)
@@ -53,7 +57,7 @@ class FFmpegUI:
                              darkcolor="#ffffff")
         self.style.map("TButton",
                        background=[('active', '#4c4c4c')])
-
+        
         # Configure grid
         self.root.grid_columnconfigure(1, weight=1)
         for i in range(12):  # Increased range to accommodate new widgets
@@ -165,6 +169,9 @@ class FFmpegUI:
 
         # Initialize codec-specific UI based on default selection
         self.update_codec()
+
+        # Start the queue processing loop
+        self.root.after(100, self.process_queue)
 
     def browse_img_seq(self):
         current_dir = self.img_seq_folder.get()
@@ -304,6 +311,40 @@ class FFmpegUI:
             self.scale_factor = None
 
     def run_ffmpeg(self):
+        # Add these checks before running FFmpeg
+        # Check input directory and files
+        img_folder = self.img_seq_folder.get()
+        if not os.path.exists(img_folder):
+            messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
+            return
+        if not os.access(img_folder, os.R_OK):
+            messagebox.showerror("Error", f"Cannot read from input folder: {img_folder}")
+            return
+
+        # Check output directory
+        output_dir = self.output_folder.get()
+        if not os.path.exists(output_dir):
+            try:
+                os.makedirs(output_dir)
+            except Exception as e:
+                messagebox.showerror("Error", f"Cannot create output directory: {e}")
+                return
+        if not os.access(output_dir, os.W_OK):
+            messagebox.showerror("Error", f"Cannot write to output directory: {output_dir}")
+            return
+
+        # Verify at least one input file exists
+        pattern = self.filename_pattern.get()
+        test_file = os.path.join(img_folder, pattern % self.frame_range[0])
+        if not os.path.exists(test_file):
+            messagebox.showerror("Error", f"Cannot find first frame: {test_file}")
+            return
+
+        # Add debug output
+        self.queue.put(('output', f"Input folder: {img_folder}\n"))
+        self.queue.put(('output', f"Output directory: {output_dir}\n"))
+        self.queue.put(('output', f"First frame path: {test_file}\n"))
+
         img_folder = self.img_seq_folder.get()
         pattern = self.filename_pattern.get()
         codec = self.codec_var.get()
@@ -313,7 +354,7 @@ class FFmpegUI:
             if framerate <= 0 or desired_duration <= 0:
                 raise ValueError
         except ValueError:
-            messagebox.showerror("Error", "Please enter valid frame rate and desired duration.")
+            self.queue.put(('error', "Please enter valid frame rate and desired duration."))
             return
 
         # Calculate the exact number of frames needed for the desired duration
@@ -326,7 +367,7 @@ class FFmpegUI:
         output_dir = self.output_folder.get()
 
         if not all([img_folder, pattern, framerate, output_file, output_dir]):
-            messagebox.showerror("Error", "Please fill in all fields.")
+            self.queue.put(('error', "Please fill in all fields."))
             return
 
         # Determine the correct file extension
@@ -347,14 +388,14 @@ class FFmpegUI:
         # Use the frame range information
         if hasattr(self, 'frame_range') and self.total_frames > 0:
             start_frame, end_frame = self.frame_range
-            input_pattern = re.sub(r'%0+', '%0', pattern)
+            input_pattern = pattern  # Use the original pattern with correct padding
             input_path = os.path.join(img_folder, input_pattern)
             input_args = [
                 "-start_number", str(start_frame),
                 "-i", input_path
             ]
         else:
-            messagebox.showerror("Error", "Frame range not detected. Please select the image sequence folder again.")
+            self.queue.put(('error', "Frame range not detected. Please select the image sequence folder again."))
             return
 
         output_path = os.path.join(output_dir, output_file)
@@ -365,7 +406,7 @@ class FFmpegUI:
             bitrate = self.mp4_bitrate.get()
             crf = self.mp4_crf.get()
             if not bitrate or not crf:
-                messagebox.showerror("Error", "Bitrate and CRF settings are required for H.264/H.265 encoding.")
+                self.queue.put(('error', "Bitrate and CRF settings are required for H.264/H.265 encoding."))
                 return
             
             codec_lib = "libx264" if codec == "h264" else "libx265"
@@ -384,7 +425,7 @@ class FFmpegUI:
             profile = self.prores_profile.get()
             qscale = self.prores_qscale.get()
             if not profile or not qscale:
-                messagebox.showerror("Error", "ProRes profile and Quality settings are required for ProRes encoding.")
+                self.queue.put(('error', "ProRes profile and Quality settings are required for ProRes encoding."))
                 return
             
             codec_params = [
@@ -398,7 +439,7 @@ class FFmpegUI:
                 "-pix_fmt", "rgb24"  # Use rgb24 for Animation codec
             ]
         else:
-            messagebox.showerror("Error", "Unsupported codec selected.")
+            self.queue.put(('error', "Unsupported codec selected."))
             return
 
         # Calculate scale factor with higher precision
@@ -439,39 +480,86 @@ class FFmpegUI:
 
     def execute_ffmpeg(self, cmd, output_path, actual_duration):
         try:
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+            # Start FFmpeg process
+            self.queue.put(('output', "Starting FFmpeg process...\n"))
             
-            total_frames = self.total_frames
-            start_frame = self.frame_range[0]
+            process = subprocess.Popen(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1
+            )
             
-            for line in process.stdout:
-                self.output_text.insert(tk.END, line)
-                self.output_text.see(tk.END)
-                self.root.update_idletasks()
-                
-                if "frame=" in line:
-                    match = re.search(r'frame=\s*(\d+)', line)
-                    if match:
-                        current_frame = int(match.group(1)) + start_frame - 1
-                        progress = (current_frame - start_frame + 1) / total_frames * 100
-                        self.progress_var.set(progress)
-                        self.status_label.config(text=f"Processing frame {current_frame} of {start_frame + total_frames - 1}")
-                        self.root.update_idletasks()
+            self.queue.put(('output', f"Process started with PID: {process.pid}\n"))
 
+            # Function to read stdout
+            def read_stdout():
+                try:
+                    for line in process.stdout:
+                        self.queue.put(('output', line))
+                        if "frame=" in line:
+                            match = re.search(r'frame=\s*(\d+)', line)
+                            if match:
+                                current_frame = int(match.group(1)) + self.frame_range[0] - 1
+                                progress = (current_frame - self.frame_range[0] + 1) / self.total_frames * 100
+                                status = f"Processing frame {current_frame} of {self.frame_range[0] + self.total_frames - 1}"
+                                self.queue.put(('progress', (progress, status)))
+                except Exception as e:
+                    self.queue.put(('output', f"\nOutput Reader Error: {str(e)}\n"))
+
+            # Function to read stderr
+            def read_stderr():
+                try:
+                    for line in process.stderr:
+                        self.queue.put(('output', f"ERROR: {line}"))
+                except Exception as e:
+                    self.queue.put(('output', f"\nError Reading Stderr: {str(e)}\n"))
+
+            # Start threads to read stdout and stderr
+            stdout_thread = threading.Thread(target=read_stdout)
+            stderr_thread = threading.Thread(target=read_stderr)
+            stdout_thread.daemon = True
+            stderr_thread.daemon = True
+            stdout_thread.start()
+            stderr_thread.start()
+
+            # Wait for FFmpeg process to complete
             process.wait()
-            if process.returncode == 0:
-                self.progress_var.set(100)
-                self.status_label.config(text="Conversion complete")
-                messagebox.showinfo("Success", f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds")
+            stdout_thread.join()
+            stderr_thread.join()
+
+            if process.returncode != 0:
+                self.queue.put(('error', f"FFmpeg process returned {process.returncode}"))
             else:
-                raise subprocess.CalledProcessError(process.returncode, cmd)
-        except subprocess.CalledProcessError as e:
-            messagebox.showerror("FFmpeg Error", f"An error occurred while running FFmpeg:\n{e}")
+                success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
+                self.queue.put(('success', success_message))
+            
         except Exception as e:
-            messagebox.showerror("Error", f"An unexpected error occurred:\n{str(e)}")
+            self.queue.put(('error', f"Unexpected error: {str(e)}"))
+
+    def process_queue(self):
+        try:
+            while not self.queue.empty():
+                msg_type, content = self.queue.get_nowait()
+                if msg_type == 'output':
+                    self.output_text.insert(tk.END, content)
+                    self.output_text.see(tk.END)
+                elif msg_type == 'progress':
+                    progress, status = content
+                    self.progress_var.set(progress)
+                    self.status_label.config(text=status)
+                elif msg_type == 'error':
+                    messagebox.showerror("FFmpeg Error", content)
+                elif msg_type == 'success':
+                    self.progress_var.set(100)
+                    self.status_label.config(text="Conversion complete")
+                    messagebox.showinfo("Success", content)
+        except queue.Empty:
+            pass
         finally:
-            self.progress_var.set(0)
-            self.status_label.config(text="")
+            # Schedule the next queue check
+            self.root.after(100, self.process_queue)
 
 if __name__ == "__main__":
     root = tk.Tk()
