@@ -9,6 +9,7 @@ import threading
 from tkinter.font import Font
 import queue
 
+
 class FFmpegUI:
     def __init__(self, root):
         self.root = root
@@ -311,12 +312,25 @@ class FFmpegUI:
             self.scale_factor = None
 
     def run_ffmpeg(self):
-        # Add these checks before running FFmpeg
         # Check input directory and files
         img_folder = self.img_seq_folder.get()
         if not os.path.exists(img_folder):
             messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
             return
+
+        # Check if output file already exists
+        output_dir = self.output_folder.get()
+        output_file = self.output_filename.get().strip()
+        output_path = os.path.join(output_dir, output_file)
+
+        if os.path.exists(output_path):
+            response = messagebox.askyesno(
+                "File Exists",
+                f"The file '{output_file}' already exists. Do you want to overwrite it?"
+            )
+            if not response:
+                return
+
         if not os.access(img_folder, os.R_OK):
             messagebox.showerror("Error", f"Cannot read from input folder: {img_folder}")
             return
