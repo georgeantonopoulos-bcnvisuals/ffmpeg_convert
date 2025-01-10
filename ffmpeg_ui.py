@@ -64,6 +64,14 @@ class FFmpegUI:
         for i in range(12):  # Increased range to accommodate new widgets
             self.root.grid_rowconfigure(i, weight=1)
 
+        # Configure Combobox style for dark selection
+        self.style.map('TCombobox',
+            selectbackground=[('readonly', '#404040')],
+            selectforeground=[('readonly', '#ffffff')],
+            fieldbackground=[('readonly', '#2b2b2b')],
+            background=[('readonly', '#2b2b2b')]
+        )
+
         # Load last used input folder
         self.last_input_folder = self.load_last_input_folder()
 
@@ -234,8 +242,13 @@ class FFmpegUI:
 
     def update_output_folder(self, input_folder):
         output_folder = os.path.dirname(input_folder)
-        self.output_folder.delete(0, tk.END)
-        self.output_folder.insert(0, output_folder)
+        response = messagebox.askyesno(
+            "Update Output Folder",
+            f"Would you like to set the output folder to:\n{output_folder}?"
+        )
+        if response:
+            self.output_folder.delete(0, tk.END)
+            self.output_folder.insert(0, output_folder)
 
     def load_last_input_folder(self):
         try:
