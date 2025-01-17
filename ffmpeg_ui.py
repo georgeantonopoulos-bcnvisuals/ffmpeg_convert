@@ -11,6 +11,18 @@ import queue
 import sys
 import importlib
 
+# Default settings
+DEFAULT_SETTINGS = {
+    "last_input_folder": "",
+    "last_output_folder": "",
+    "frame_rate": "60",
+    "desired_duration": "15",
+    "codec": "h265",
+    "mp4_bitrate": "30",
+    "mp4_crf": "23",
+    "prores_profile": "2",  # 422
+    "prores_qscale": "9"
+}
 
 def check_and_install_dependencies():
     def install_package(package):
@@ -55,6 +67,9 @@ class FFmpegUI:
         self.root.geometry("800x700")  # Increased height to accommodate new label
         self.root.minsize(600, 400)    # Set minimum window size
 
+        # Load settings
+        self.settings = self.load_settings()
+        
         # Initialize the queue for thread-safe communication
         self.queue = queue.Queue()
 
@@ -110,7 +125,7 @@ class FFmpegUI:
         )
 
         # Load last used input folder
-        self.last_input_folder = self.load_last_input_folder()
+        self.last_input_folder = self.settings["last_input_folder"]
 
         # Image Sequence Selection
         ttk.Label(root, text="Image Sequence Folder:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=10, pady=(20,5))
@@ -125,7 +140,7 @@ class FFmpegUI:
 
         # Codec Selection
         ttk.Label(root, text="Codec:", font=self.title_font).grid(row=2, column=0, sticky="w", padx=10, pady=5)
-        self.codec_var = tk.StringVar(value="h265")
+        self.codec_var = tk.StringVar(value=self.settings["codec"])
         self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_422_lt", "prores_444", "qtrle"], state="readonly")
         self.codec_dropdown.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
@@ -133,14 +148,14 @@ class FFmpegUI:
         # Frame Rate Selection
         ttk.Label(root, text="Frame Rate (fps):", font=self.title_font).grid(row=3, column=0, sticky="w", padx=10, pady=5)
         self.frame_rate = ttk.Entry(root)
-        self.frame_rate.insert(0, "60")
+        self.frame_rate.insert(0, self.settings["frame_rate"])
         self.frame_rate.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
 
         # Desired Duration Input
         ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
         self.desired_duration = ttk.Entry(root)
-        self.desired_duration.insert(0, "15")
+        self.desired_duration.insert(0, self.settings["desired_duration"])
         self.desired_duration.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.desired_duration.bind("<KeyRelease>", self.update_duration)  # Update duration on duration change
 
@@ -154,6 +169,9 @@ class FFmpegUI:
         ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
         self.output_folder = ttk.Entry(root)
         self.output_folder.grid(row=6, column=1, sticky="ew", padx=10, pady=5)
+        # Initialize output folder from settings
+        if self.settings["last_output_folder"]:
+            self.output_folder.insert(0, self.settings["last_output_folder"])
         ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=6, column=2, padx=10, pady=5)
 
         # Run Button
@@ -222,7 +240,7 @@ class FFmpegUI:
     def browse_img_seq(self):
         current_dir = self.img_seq_folder.get()
         if not current_dir or not os.path.isdir(current_dir):
-            initial_dir = self.last_input_folder
+            initial_dir = self.settings["last_input_folder"]
         else:
             initial_dir = current_dir
 
@@ -231,36 +249,141 @@ class FFmpegUI:
             self.img_seq_folder.delete(0, tk.END)
             self.img_seq_folder.insert(0, folder)
             self.update_filename_pattern(folder)
-            self.save_last_input_folder(folder)
+            self.save_settings()  # Save settings after updating input folder
             self.update_output_folder(folder)
-            self.update_duration()  # Update duration after selecting new folder
+            self.update_duration()
 
     def update_filename_pattern(self, folder):
         try:
             files = os.listdir(folder)
             image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
+            
             if image_files:
-                collections, remainder = clique.assemble(image_files)
+                # Group files by their base pattern (everything before the frame number)
+                sequence_groups = {}
+                for filename in image_files:
+                    # Split the filename into parts
+                    base, ext = os.path.splitext(filename)  # First split off the final extension
+                    if '.' in base:  # If there's another dot (for frame number)
+                        pattern_base, frame_number = base.rsplit('.', 1)  # Split at the last dot before extension
+                        if frame_number.isdigit():  # Only process if the part between dots is a number
+                            if pattern_base not in sequence_groups:
+                                sequence_groups[pattern_base] = []
+                            sequence_groups[pattern_base].append(filename)
                 
-                if collections:
-                    collection = collections[0]
-                    pattern = f"{collection.head}%0{collection.padding}d{collection.tail}"
-                    first_frame = min(collection.indexes)
-                    last_frame = max(collection.indexes)
-                    
-                    self.filename_pattern.delete(0, tk.END)
-                    self.filename_pattern.insert(0, pattern)
-                    
-                    self.frame_range = (first_frame, last_frame)
-                    self.total_frames = len(collection.indexes)  # Store total frames
-                    
-                    # Update duration
-                    self.update_duration()
-
-                    # Update output filename without extension and remove trailing dots or underscores
-                    output_name = collection.head.rstrip('_.')
-                    self.output_filename.delete(0, tk.END)
-                    self.output_filename.insert(0, output_name)
+                # Convert groups to collections
+                all_collections = []
+                for base_pattern, files in sequence_groups.items():
+                    if len(files) > 1:  # Only create a collection if there are multiple files
+                        collection_files = sorted(files)  # Sort files to ensure proper order
+                        collections, remainder = clique.assemble(collection_files)
+                        all_collections.extend(collections)
+                
+                if all_collections:
+                    if len(all_collections) > 1:
+                        # Create a sequence selection dialog
+                        dialog = tk.Toplevel(self.root)
+                        dialog.title("Select Image Sequence")
+                        dialog.geometry("600x400")
+                        dialog.transient(self.root)
+                        dialog.grab_set()  # Make the dialog modal
+                        
+                        # Configure dialog theme
+                        dialog.configure(bg='#2b2b2b')
+                        
+                        # Add a label
+                        ttk.Label(
+                            dialog, 
+                            text="Multiple image sequences found. Please select one:",
+                            font=self.title_font
+                        ).pack(pady=10, padx=10)
+                        
+                        # Create a frame for the listbox and scrollbar
+                        frame = ttk.Frame(dialog)
+                        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+                        
+                        # Create listbox with dark theme
+                        listbox = tk.Listbox(
+                            frame,
+                            bg='#1e1e1e',
+                            fg='#ffffff',
+                            selectmode=tk.SINGLE,
+                            font=self.custom_font
+                        )
+                        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                        
+                        # Add scrollbar
+                        scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=listbox.yview)
+                        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+                        listbox.config(yscrollcommand=scrollbar.set)
+                        
+                        # Populate listbox with sequence information
+                        for idx, collection in enumerate(all_collections):
+                            first_frame = min(collection.indexes)
+                            last_frame = max(collection.indexes)
+                            frame_count = len(collection.indexes)
+                            sequence_info = f"{collection.head}[{first_frame}-{last_frame}]{collection.tail} ({frame_count} frames)"
+                            listbox.insert(tk.END, sequence_info)
+                            
+                        # Store the collections for later use
+                        dialog.collections = all_collections
+                        
+                        def on_select():
+                            selection = listbox.curselection()
+                            if selection:
+                                selected_idx = selection[0]
+                                collection = dialog.collections[selected_idx]
+                                # Update the UI with selected sequence
+                                pattern = f"{collection.head}%0{collection.padding}d{collection.tail}"
+                                self.filename_pattern.delete(0, tk.END)
+                                self.filename_pattern.insert(0, pattern)
+                                
+                                self.frame_range = (min(collection.indexes), max(collection.indexes))
+                                self.total_frames = len(collection.indexes)
+                                
+                                # Update output filename
+                                output_name = collection.head.rstrip('_.')
+                                self.output_filename.delete(0, tk.END)
+                                self.output_filename.insert(0, output_name)
+                                
+                                # Update duration
+                                self.update_duration()
+                                dialog.destroy()
+                            else:
+                                messagebox.showwarning("Warning", "Please select a sequence.", parent=dialog)
+                        
+                        # Add Select button
+                        ttk.Button(
+                            dialog,
+                            text="Select",
+                            command=on_select
+                        ).pack(pady=10)
+                        
+                        # Center the dialog on the parent window
+                        dialog.update_idletasks()
+                        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+                        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+                        dialog.geometry(f"+{x}+{y}")
+                        
+                        # Wait for the dialog to close
+                        self.root.wait_window(dialog)
+                    else:
+                        # Single sequence found - use existing logic
+                        collection = all_collections[0]
+                        pattern = f"{collection.head}%0{collection.padding}d{collection.tail}"
+                        self.filename_pattern.delete(0, tk.END)
+                        self.filename_pattern.insert(0, pattern)
+                        
+                        self.frame_range = (min(collection.indexes), max(collection.indexes))
+                        self.total_frames = len(collection.indexes)
+                        
+                        # Update output filename
+                        output_name = collection.head.rstrip('_.')
+                        self.output_filename.delete(0, tk.END)
+                        self.output_filename.insert(0, output_name)
+                        
+                        # Update duration
+                        self.update_duration()
                 else:
                     messagebox.showwarning("Warning", "No image sequence found in the selected folder.")
                     self.total_frames = 0
@@ -278,42 +401,74 @@ class FFmpegUI:
             self.desired_duration.insert(0, "0")
 
     def update_output_folder(self, input_folder):
+        """Update output folder with option to use parent directory of input folder"""
         output_folder = os.path.dirname(input_folder)
-        response = messagebox.askyesno(
-            "Update Output Folder",
-            f"Would you like to set the output folder to:\n{output_folder}?"
-        )
-        if response:
-            self.output_folder.delete(0, tk.END)
-            self.output_folder.insert(0, output_folder)
+        current_output = self.output_folder.get()
+        
+        # If there's no current output folder set, or it's different from the suggested one
+        if not current_output or current_output != output_folder:
+            response = messagebox.askyesno(
+                "Update Output Folder",
+                f"Would you like to set the output folder to:\n{output_folder}?"
+            )
+            if response:
+                self.output_folder.delete(0, tk.END)
+                self.output_folder.insert(0, output_folder)
+                self.save_settings()  # Save settings after updating output folder
 
-    def load_last_input_folder(self):
+    def load_settings(self):
+        """Load settings from JSON file, or create with defaults if not exists"""
         try:
-            with open('last_input_folder.json', 'r') as f:
-                return json.load(f)['folder']
-        except:
-            return ""
+            with open('ffmpeg_settings.json', 'r') as f:
+                settings = json.load(f)
+                # Update with any missing default settings
+                for key, value in DEFAULT_SETTINGS.items():
+                    if key not in settings:
+                        settings[key] = value
+                return settings
+        except (FileNotFoundError, json.JSONDecodeError):
+            return DEFAULT_SETTINGS.copy()
 
-    def save_last_input_folder(self, folder):
-        with open('last_input_folder.json', 'w') as f:
-            json.dump({'folder': folder}, f)
+    def save_settings(self):
+        """Save current settings to JSON file"""
+        settings = {
+            "last_input_folder": self.img_seq_folder.get(),
+            "last_output_folder": self.output_folder.get(),
+            "frame_rate": self.frame_rate.get(),
+            "desired_duration": self.desired_duration.get(),
+            "codec": self.codec_var.get(),
+            "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else DEFAULT_SETTINGS["mp4_bitrate"],
+            "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else DEFAULT_SETTINGS["mp4_crf"],
+            "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else DEFAULT_SETTINGS["prores_profile"],
+            "prores_qscale": self.prores_qscale.get() if hasattr(self, 'prores_qscale') else DEFAULT_SETTINGS["prores_qscale"]
+        }
+        
+        try:
+            with open('ffmpeg_settings.json', 'w') as f:
+                json.dump(settings, f, indent=4)
+        except Exception as e:
+            print(f"Error saving settings: {e}")
 
     def browse_output_folder(self):
-        folder = filedialog.askdirectory()
+        initial_dir = self.output_folder.get() or self.settings["last_output_folder"]
+        folder = filedialog.askdirectory(initialdir=initial_dir)
         if folder:
             self.output_folder.delete(0, tk.END)
             self.output_folder.insert(0, folder)
+            self.save_settings()  # Save settings after updating output folder
 
     def update_codec(self, event=None):
         codec = self.codec_var.get()
-        print(f"Selected codec: {codec}")  # Debug statement
+        print(f"Selected codec: {codec}")
 
         if codec in ["h264", "h265"]:
             self.h264_h265_frame.grid()
             self.prores_frame.grid_remove()
-            # Set default ProRes values to None
-            self.prores_qscale.set("")
-            self.prores_profile.set("")
+            # Set MP4 values from settings
+            if hasattr(self, 'mp4_bitrate'):
+                self.mp4_bitrate.set(self.settings["mp4_bitrate"])
+            if hasattr(self, 'mp4_crf'):
+                self.mp4_crf.set(self.settings["mp4_crf"])
         elif codec.startswith("prores"):
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid()
@@ -338,10 +493,16 @@ class FFmpegUI:
                 "-pix_fmt", "rgb24"  # Use rgb24 for Animation codec
             ]
         else:
+            # Set ProRes values from settings
+            if hasattr(self, 'prores_qscale'):
+                self.prores_qscale.set(self.settings["prores_qscale"])
+            if hasattr(self, 'prores_profile'):
+                self.prores_profile.set(self.settings["prores_profile"])
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid_remove()
 
-        self.update_duration()  # Update duration when codec changes
+        self.save_settings()  # Save settings after updating codec
+        self.update_duration()
 
     def update_duration(self, event=None):
         # This method now calculates the scale factor based on desired duration and frame rate
@@ -368,33 +529,45 @@ class FFmpegUI:
             messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
             return
 
-        # Check if output file already exists
-        output_dir = self.output_folder.get()
-        output_file = self.output_filename.get().strip()
-        output_path = os.path.join(output_dir, output_file)
-
-        if os.path.exists(output_path):
-            response = messagebox.askyesno(
-                "File Exists",
-                f"The file '{output_file}' already exists. Do you want to overwrite it?"
-            )
-            if not response:
-                return
-
-        if not os.access(img_folder, os.R_OK):
-            messagebox.showerror("Error", f"Cannot read from input folder: {img_folder}")
+        # Get and validate output directory
+        output_dir = self.output_folder.get().strip()
+        if not output_dir:
+            messagebox.showerror("Error", "Please select an output directory")
             return
 
-        # Check output directory
-        output_dir = self.output_folder.get()
+        # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
             try:
                 os.makedirs(output_dir)
             except Exception as e:
                 messagebox.showerror("Error", f"Cannot create output directory: {e}")
                 return
+
+        # Check if output directory is writable
         if not os.access(output_dir, os.W_OK):
             messagebox.showerror("Error", f"Cannot write to output directory: {output_dir}")
+            return
+
+        # Get and validate output filename
+        output_file = self.output_filename.get().strip()
+        if not output_file:
+            messagebox.showerror("Error", "Please enter an output filename")
+            return
+
+        # Construct full output path
+        output_path = os.path.join(output_dir, output_file)
+
+        # Check if output file already exists
+        if os.path.exists(output_path):
+            response = messagebox.askyesno(
+                "File Exists",
+                f"The file '{output_file}' already exists in the output directory. Do you want to overwrite it?"
+            )
+            if not response:
+                return
+
+        if not os.access(img_folder, os.R_OK):
+            messagebox.showerror("Error", f"Cannot read from input folder: {img_folder}")
             return
 
         # Verify at least one input file exists
@@ -532,8 +705,9 @@ class FFmpegUI:
             "-accurate_seek",
             "-ss", "0",  # Start from beginning
             "-t", f"{desired_duration:.6f}",  # Duration before input for better precision
-            "-framerate", "30000/1001"  # Exact 29.97 fps
+            "-framerate", f"{framerate}"  # Use exact framerate from user input
         ] + input_args + [
+            "-r", str(framerate),  # Set output framerate
             "-vsync", "cfr"  # Moved -vsync cfr immediately after input
         ] + ffmpeg_filter_args + frames_arg + [
             "-pix_fmt", "yuv420p",
