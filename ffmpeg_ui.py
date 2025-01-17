@@ -8,6 +8,43 @@ import json
 import threading
 from tkinter.font import Font
 import queue
+import sys
+import importlib
+
+
+def check_and_install_dependencies():
+    def install_package(package):
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    # Check for tkinter
+    try:
+        import tkinter
+    except ImportError:
+        print("Tkinter not found. Installing tkinter...")
+        if sys.platform.startswith('linux'):
+            print("On Linux systems, tkinter needs to be installed via system package manager.")
+            print("Please run: sudo apt-get install python3-tk (for Debian/Ubuntu)")
+            print("Or: sudo dnf install python3-tkinter (for Fedora/RHEL)")
+            sys.exit(1)
+        else:
+            if not install_package('tk'):
+                print("Failed to install tkinter. Please install it manually.")
+                sys.exit(1)
+
+    # Check for clique
+    try:
+        import clique
+    except ImportError:
+        print("Clique not found. Installing clique...")
+        if not install_package('clique'):
+            print("Failed to install clique. Please install it manually.")
+            sys.exit(1)
+
+    print("All dependencies are installed successfully!")
 
 
 class FFmpegUI:
@@ -386,7 +423,7 @@ class FFmpegUI:
 
         # Calculate the exact number of frames needed for the desired duration
         total_frames_needed = int(round(framerate * desired_duration))  # Added round() function
-        
+
         # Calculate the actual duration based on the exact number of frames
         actual_duration = total_frames_needed / framerate
 
@@ -473,7 +510,8 @@ class FFmpegUI:
         scale_factor = total_frames_needed / (self.total_frames - 1)  # Adjusted for frame counting
 
         # Use the exact scale factor in the setpts filter with higher precision
-        setpts_filter = f"setpts={scale_factor:.10f}*PTS"  # Added precision to avoid floating point errors
+        # Modified to include PTS-STARTPTS for clean timestamps
+        setpts_filter = f"setpts={scale_factor:.10f}*PTS, setpts=PTS-STARTPTS"
         ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
 
         ffmpeg_filter_args = ["-vf", ffmpeg_filters]
@@ -488,12 +526,18 @@ class FFmpegUI:
             "-colorspace", "bt709"
         ]
 
-        # Base ffmpeg command with setpts filter and frame limit
+        # Base ffmpeg command with precise NTSC timing parameters
         cmd = [
             "ffmpeg",
-            "-framerate", str(framerate)
-        ] + input_args + ffmpeg_filter_args + frames_arg + [
+            "-accurate_seek",
+            "-ss", "0",  # Start from beginning
+            "-t", f"{desired_duration:.6f}",  # Duration before input for better precision
+            "-framerate", "30000/1001"  # Exact 29.97 fps
+        ] + input_args + [
+            "-vsync", "cfr"  # Moved -vsync cfr immediately after input
+        ] + ffmpeg_filter_args + frames_arg + [
             "-pix_fmt", "yuv420p",
+            "-video_track_timescale", "30000",  # Proper NTSC timing
             "-an"
         ] + codec_params + color_space_args + [
             output_path
@@ -589,6 +633,7 @@ class FFmpegUI:
             self.root.after(100, self.process_queue)
 
 if __name__ == "__main__":
+    check_and_install_dependencies()
     root = tk.Tk()
     app = FFmpegUI(root)
     root.mainloop()
