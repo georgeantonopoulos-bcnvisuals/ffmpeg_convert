@@ -1,0 +1,11 @@
+{
+    "last_input_folder": "/mnt/production/project/civilizationvii/publish/Film/Digital_Liveboard_Array/render/Compositing/v001",
+    "last_output_folder": "/mnt/production/project/civilizationvii/publish/Delivery",
+    "frame_rate": "29.97",
+    "desired_duration": "15",
+    "codec": "h264",
+    "mp4_bitrate": "25",
+    "mp4_crf": "23",
+    "prores_profile": "",
+    "prores_qscale": "9"
+}

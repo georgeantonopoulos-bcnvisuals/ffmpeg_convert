@@ -18,4 +18,4 @@
        source: .
        stage-packages:
          - ffmpeg
-         - python3-pyqt5
+         - python3-pyqt5j
