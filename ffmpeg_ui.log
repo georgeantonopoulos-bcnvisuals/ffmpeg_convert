@@ -1,0 +1,187 @@
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 0.9997782705099778
+Scale factor updated to: 0.06651884700665188
+Scale factor updated to: 0.9977827050997783
+=== Starting run_ffmpeg ===
+Initial values:
+- Input type: Video File
+- Output dir: /mnt/production/user/george.antonopoulos
+- Output file: pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review
+- Codec: h265
+
+Processing input type: Video File
+Frame rate: 30.0
+Desired duration: 15.0
+
+Processing Video File input
+Video path: /mnt/production/project/pst_nolimits/publish/Film/Livescape_NY/render/Compositing/v004/pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review.mp4
+
+=== Validation passed, continuing with FFmpeg execution ===
+=== Starting run_ffmpeg ===
+Initial values:
+- Input type: Video File
+- Output dir: /mnt/production/user/george.antonopoulos
+- Output file: pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review
+- Codec: h265
+
+Processing input type: Video File
+Frame rate: 30.0
+Desired duration: 15.0
+
+Processing Video File input
+Video path: /mnt/production/project/pst_nolimits/publish/Film/Livescape_NY/render/Compositing/v004/pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review.mp4
+
+=== Validation passed, continuing with FFmpeg execution ===
+Error loading TCL files: 
+Selected codec: h265
+Selected codec: h264
+Scale factor updated to: 0.9997782705099778
+Scale factor updated to: 0.06651884700665188
+Scale factor updated to: 0.9977827050997783
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 0.9997782705099778
+Scale factor updated to: 0.06651884700665188
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Video File
+Output Dir: /mnt/production/user/george.antonopoulos
+Output File: pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review
+Codec: h265
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Video File
+Output Dir: /mnt/production/user/george.antonopoulos
+Output File: pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review
+Codec: h265
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 0.9997782705099778
+Scale factor updated to: 0.06651884700665188
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Video File
+Output Dir: /mnt/production/user/george.antonopoulos
+Output File: pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review
+Codec: h265
+Scale factor updated to: 0.9977827272235638
+FFmpeg command: ffmpeg -framerate 30.0 -i /mnt/production/project/pst_nolimits/publish/Film/Livescape_NY/render/Compositing/v004/pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review.mp4 -vf setpts=0.9977827272*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx265 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -tag:v hvc1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/user/george.antonopoulos/pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review.mp4
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 0.9997782705099778
+Selected codec: h264
+Scale factor updated to: 0.9997782705099778
+Scale factor updated to: 0.06651884700665188
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Video File
+Output Dir: /mnt/production/user/george.antonopoulos
+Output File: pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review
+Codec: h264
+Scale factor updated to: 0.9977827272235638
+FFmpeg command: ffmpeg -i /mnt/production/project/pst_nolimits/publish/Film/Livescape_NY/render/Compositing/v004/pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review.mp4 -vf setpts=0.9977827272*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx264 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -profile:v high -level:v 5.1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/user/george.antonopoulos/pst_nolimits_Livescape_NY_render_SCREEN_01_v004_review.mp4
+Scale factor updated to: 0.9977827050997783
+Error loading TCL files: 
+Selected codec: h265
+Selected codec: h264
+Error loading TCL files: 
+Selected codec: h265
+Selected codec: h264
+FFmpeg command: ffmpeg -framerate 30.0 -start_number 1001 -i /mnt/production/project/pst_nolimits/publish/Film/Bremner_Board/prerender/prerender_FLAT_BremnerBoard/v006/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.%00d.png -vf setpts=1.0000000000*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx264 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -profile:v high -level:v 5.1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/project/pst_nolimits/publish/Delivery/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.mp4
+Error loading TCL files: 
+Selected codec: h265
+Error loading TCL files: 
+Selected codec: h265
+Error loading TCL files: 
+Selected codec: h265
+Error loading TCL files: 
+Selected codec: h265
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 0.9997782705099778
+Scale factor updated to: 0.06651884700665188
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Video File
+Output Dir: /mnt/production/user/george.antonopoulos
+Output File: pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006_h264
+Codec: h265
+Scale factor updated to: 0.9977827272235638
+FFmpeg command: ffmpeg -i /mnt/production/project/pst_nolimits/publish/Film/Bremner_Board/prerender/prerender_FLAT_BremnerBoard/v006/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006_h264.mp4 -vf setpts=0.9977827272*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx265 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -tag:v hvc1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/user/george.antonopoulos/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006_h264.mp4
+Scale factor updated to: 0.9977827050997783
+Scale factor updated to: 0.9977827050997783
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Image Sequence
+Output Dir: /mnt/production/project/pst_nolimits/publish/Delivery
+Output File: pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006
+Codec: h265
+Scale factor updated to: 0.9977827050997783
+FFmpeg command: ffmpeg -framerate 30.0 -start_number 1001 -i /mnt/production/project/pst_nolimits/publish/Film/Bremner_Board/prerender/prerender_FLAT_BremnerBoard/v006/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.%00d.png -vf setpts=0.9977827051*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx265 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -tag:v hvc1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/project/pst_nolimits/publish/Delivery/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.mp4
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 0.09977827050997783
+Scale factor updated to: 0.9977827050997783
+Selected codec: h264
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Image Sequence
+Output Dir: /mnt/production/project/pst_nolimits/publish/Delivery
+Output File: pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006
+Codec: h264
+Scale factor updated to: 0.9977827050997783
+FFmpeg command: ffmpeg -framerate 30.0 -start_number 1001 -i /mnt/production/project/pst_nolimits/publish/Film/Bremner_Board/prerender/prerender_FLAT_BremnerBoard/v006/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.%00d.png -vf setpts=0.9977827051*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx264 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -profile:v high -level:v 5.1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/project/pst_nolimits/publish/Delivery/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.mp4
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 1.9955654101995566
+Selected codec: h264
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 0.09977827050997783
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Image Sequence
+Output Dir: /mnt/production/project/pst_nolimits/publish/Delivery
+Output File: pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006
+Codec: h264
+Scale factor updated to: 0.9977827050997783
+FFmpeg command: ffmpeg -framerate 30.0 -start_number 1001 -i /mnt/production/project/pst_nolimits/publish/Film/Bremner_Board/prerender/prerender_FLAT_BremnerBoard/v006/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.%00d.png -vf setpts=0.9977827051*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx264 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -profile:v high -level:v 5.1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/project/pst_nolimits/publish/Delivery/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.mp4
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 0.09977827050997783
+Scale factor updated to: 0.9977827050997783
+Selected codec: h264
+Scale factor updated to: 0.9977827050997783
+
+DEBUG -- VALIDATION CHECK
+Line number: 466
+Input Type: Image Sequence
+Output Dir: /mnt/production/project/pst_nolimits/publish/Delivery
+Output File: pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006
+Codec: h264
+Scale factor updated to: 0.9977827050997783
+FFmpeg command: ffmpeg -framerate 30.0 -start_number 1001 -i /mnt/production/project/pst_nolimits/publish/Film/Bremner_Board/prerender/prerender_FLAT_BremnerBoard/v006/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.%00d.png -vf setpts=0.9977827051*PTS,scale=in_color_matrix=bt709:out_color_matrix=bt709 -frames:v 450 -pix_fmt yuv420p -an -c:v libx264 -preset medium -b:v 30M -maxrate 60M -bufsize 60M -crf 23 -profile:v high -level:v 5.1 -color_primaries bt709 -color_trc bt709 -colorspace bt709 /mnt/production/project/pst_nolimits/publish/Delivery/pst_nolimits_Bremner_Board_prerender_FLAT_BremnerBoard_v006.mp4
+Error loading TCL files: 
+Selected codec: h265
+Scale factor updated to: 1.9955654101995566
+Scale factor updated to: 1.9955654101995566
