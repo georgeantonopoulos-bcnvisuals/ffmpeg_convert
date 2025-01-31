@@ -1,3 +1,5 @@
+print("Debug: ffmpeg_ui.py script started")  # <-- ADD THIS LINE at the VERY TOP of the file
+
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import subprocess
@@ -36,6 +38,22 @@ def check_and_install_dependencies():
             return True
         except subprocess.CalledProcessError:
             return False
+
+    # Check for oiiotool
+    try:
+        oiiotool_result = subprocess.run(['which', 'oiiotool'], capture_output=True, text=True)
+        if oiiotool_result.returncode != 0:
+            print("ERROR: oiiotool not found in system path!")
+            print("Please install OpenImageIO tools using your package manager:")
+            print("For CentOS/RHEL: sudo dnf install OpenImageIO-tools")
+            print("For Ubuntu/Debian: sudo apt-get install openimageio-tools")
+            sys.exit(1)
+        else:
+            print(f"Found oiiotool at: {oiiotool_result.stdout.strip()}")
+    except Exception as e:
+        print(f"Error checking for oiiotool: {e}")
+        print("Please ensure OpenImageIO tools are installed.")
+        sys.exit(1)
 
     # Check for tkinter
     try:
@@ -267,7 +285,7 @@ class FFmpegUI:
     def update_filename_pattern(self, folder):
         try:
             files = os.listdir(folder)
-            image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
+            image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.exr'))]
             
             if image_files:
                 # Group files by their base pattern (everything before the frame number)
@@ -534,8 +552,7 @@ class FFmpegUI:
             self.scale_factor = None
 
     def run_ffmpeg(self):
-        print("\nDEBUG -- VALIDATION CHECK")
-        print(f"Line number: {inspect.currentframe().f_lineno}")
+        print("Debug: run_ffmpeg function called")
 
         # For now, we'll force image sequence mode since video file handling isn't fully implemented
         input_type = "Image Sequence"
@@ -543,16 +560,57 @@ class FFmpegUI:
         output_file = self.output_filename.get().strip()
         codec = self.codec_var.get()
 
-        print(f"Input Type: {input_type}")
-        print(f"Output Dir: {output_dir}")
-        print(f"Output File: {output_file}")
-        print(f"Codec: {codec}")
+        print(f"=== Starting run_ffmpeg ===")
+        print("Initial values:")
+        print(f"- Input type: {input_type}")
+        print(f"- Output dir: {output_dir}")
+        print(f"- Output file: {output_file}")
+        print(f"- Codec: {codec}")
 
         # Check input directory and files
         img_folder = self.img_seq_folder.get()
+        print(f"\nChecking input folder: {img_folder}")
         if not os.path.exists(img_folder):
+            print("Error: Input folder does not exist")
             messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
             return
+
+        # Create temp directory for EXR conversion if needed
+        pattern = self.filename_pattern.get()
+        print(f"\nFilename pattern: {pattern}")
+        is_exr = pattern.lower().endswith('.exr')
+        print(f"Is EXR: {is_exr}")
+        temp_dir = None
+        
+        if is_exr:
+            print(f"EXR Conversion Debug:")
+            print(f"Image Folder: {img_folder}")
+            print(f"Pattern: {pattern}")
+            print(f"Frame Range: {self.frame_range}")
+            print(f"Total Frames: {self.total_frames}")
+            print(f"Temp Directory: {temp_dir}")
+            temp_dir = os.path.join(output_dir, ".temp_frames")
+            if not os.path.exists(temp_dir):
+                print(f"Creating temp dir: {temp_dir}")
+                os.makedirs(temp_dir)
+            
+            # Get actual frame numbers from detected sequence
+            start_frame, end_frame = self.frame_range
+            total_frames = end_frame - start_frame + 1
+            
+            # Use oiiotool's native frame syntax
+            input_spec = os.path.join(img_folder, pattern.replace("%04d", "@")) + f"{start_frame}-{end_frame}"
+            
+            cmd = [
+                "oiiotool",
+                input_spec,  # e.g.: /path/to/files_v024@1001-1900.exr
+                "--colorconvert:colorconfig=ocio", "ACEScg", "sRGB",
+                "--ch", "R,G,B",
+                "-o", os.path.join(temp_dir, "converted_%04d.png")
+            ]
+            
+            # Remove --frames argument since it's in the input spec
+            # ... rest of the code ...
 
         # Get and validate output directory
         output_dir = self.output_folder.get().strip()
@@ -752,6 +810,7 @@ class FFmpegUI:
         try:
             # Start FFmpeg process
             self.queue.put(('output', "Starting FFmpeg process...\n"))
+            print(f"\nExecuting FFmpeg command:\n{' '.join(cmd)}\n")
             
             process = subprocess.Popen(
                 cmd, 
@@ -762,29 +821,63 @@ class FFmpegUI:
             )
             
             self.queue.put(('output', f"Process started with PID: {process.pid}\n"))
+            print(f"FFmpeg process started with PID: {process.pid}")
+
+            # Function to read stderr (FFmpeg outputs progress to stderr)
+            def read_stderr():
+                try:
+                    print("Starting stderr reader thread")
+                    for line in iter(process.stderr.readline, ''):
+                        # Always show the raw output first
+                        self.queue.put(('output', line))
+                        print(f"STDERR: {line.strip()}")
+                        
+                        # Then try to parse progress information
+                        if "frame=" in line:
+                            try:
+                                # Extract frame number
+                                frame_match = re.search(r'frame=\s*(\d+)', line)
+                                # Extract time
+                                time_match = re.search(r'time=\s*(\d+:\d+:\d+\.\d+)', line)
+                                # Extract speed
+                                speed_match = re.search(r'speed=\s*(\d+\.\d+)x', line)
+                                
+                                if frame_match:
+                                    current_frame = int(frame_match.group(1))
+                                    progress = (current_frame / self.total_frames) * 100 if self.total_frames > 0 else 0
+                                    
+                                    # Build status message
+                                    status_parts = []
+                                    status_parts.append(f"Frame: {current_frame}/{self.total_frames}")
+                                    
+                                    if time_match:
+                                        status_parts.append(f"Time: {time_match.group(1)}")
+                                    
+                                    if speed_match:
+                                        status_parts.append(f"Speed: {speed_match.group(1)}x")
+                                    
+                                    status = " | ".join(status_parts)
+                                    
+                                    # Update progress and status
+                                    self.queue.put(('progress', (progress, status)))
+                            except Exception as e:
+                                print(f"Error parsing progress: {str(e)}")
+                                # Don't return here, continue processing output
+                                
+                except Exception as e:
+                    print(f"Stderr reader error: {str(e)}")
+                    self.queue.put(('output', f"\nError Reading Stderr: {str(e)}\n"))
 
             # Function to read stdout
             def read_stdout():
                 try:
-                    for line in process.stdout:
+                    print("Starting stdout reader thread")
+                    for line in iter(process.stdout.readline, ''):
+                        print(f"STDOUT: {line.strip()}")
                         self.queue.put(('output', line))
-                        if "frame=" in line:
-                            match = re.search(r'frame=\s*(\d+)', line)
-                            if match:
-                                current_frame = int(match.group(1)) + self.frame_range[0] - 1
-                                progress = (current_frame - self.frame_range[0] + 1) / self.total_frames * 100
-                                status = f"Processing frame {current_frame} of {self.frame_range[0] + self.total_frames - 1}"
-                                self.queue.put(('progress', (progress, status)))
                 except Exception as e:
+                    print(f"Stdout reader error: {str(e)}")
                     self.queue.put(('output', f"\nOutput Reader Error: {str(e)}\n"))
-
-            # Function to read stderr
-            def read_stderr():
-                try:
-                    for line in process.stderr:
-                        self.queue.put(('output', f"ERROR: {line}"))
-                except Exception as e:
-                    self.queue.put(('output', f"\nError Reading Stderr: {str(e)}\n"))
 
             # Start threads to read stdout and stderr
             stdout_thread = threading.Thread(target=read_stdout)
@@ -796,11 +889,19 @@ class FFmpegUI:
 
             # Wait for FFmpeg process to complete
             process.wait()
-            stdout_thread.join()
-            stderr_thread.join()
+            stdout_thread.join(timeout=1)  # Add timeout to prevent hanging
+            stderr_thread.join(timeout=1)  # Add timeout to prevent hanging
 
             if process.returncode != 0:
-                self.queue.put(('error', f"FFmpeg process returned {process.returncode}"))
+                error_message = f"FFmpeg process returned {process.returncode}"
+                # Try to get any remaining error output
+                try:
+                    remaining_error = process.stderr.read()
+                    if remaining_error:
+                        error_message += f"\nError details:\n{remaining_error}"
+                except:
+                    pass
+                self.queue.put(('error', error_message))
             else:
                 success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
                 self.queue.put(('success', success_message))
