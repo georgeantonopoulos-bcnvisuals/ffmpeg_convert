@@ -1,10 +1,10 @@
 {
-    "last_input_folder": "/mnt/production/project/civilizationvii/publish/Film/Digital_Liveboard_Array/render/Compositing/v001",
-    "last_output_folder": "/mnt/production/project/civilizationvii/publish/Delivery",
-    "frame_rate": "29.97",
-    "desired_duration": "15",
+    "last_input_folder": "/mnt/production/project/inv_qqq/work/Film/LED_2D_No_1/Compositing/renders/nuke/prerender_LED_2D_No1_MOCKUP_ENG_pngs",
+    "last_output_folder": "/mnt/production/project/inv_qqq/work/Delivery/Led_2D_No_1/v003",
+    "frame_rate": "25",
+    "desired_duration": "30",
     "codec": "h264",
-    "mp4_bitrate": "25",
+    "mp4_bitrate": "30",
     "mp4_crf": "23",
     "prores_profile": "",
     "prores_qscale": "9"

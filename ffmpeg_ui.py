@@ -1010,9 +1010,6 @@ class FFmpegUI:
             print(f"DEBUG: Creating temp dir: {self.temp_dir}")
             self.queue.put(('output', f"DEBUG: Creating temp dir: {self.temp_dir}\n"))
             os.makedirs(self.temp_dir)
-        else:
-            print(f"DEBUG: Temp dir exists: {self.temp_dir}")
-            self.queue.put(('output', f"DEBUG: Temp dir exists: {self.temp_dir}\n"))
         
         total_frames = end_frame - start_frame + 1
         print("DEBUG: total_frames =", total_frames)
@@ -1043,9 +1040,14 @@ class FFmpegUI:
         print(f"DEBUG: Need to convert {len(missing_frames)} frames")
         self.queue.put(('output', f"Converting {len(missing_frames)} frames\n"))
         
+        # Get selected color space and format it for command line (replace spaces with underscores)
+        input_colorspace = self.color_space_var.get().replace(" ", "_")
+        output_colorspace = "Output_-_sRGB"  # Fixed output colorspace with underscores
+        
         # Build the oiiotool command line with ACES color management
-        input_pattern = os.path.join(img_folder, f"{before}#.exr")
-        output_pattern = os.path.join(self.temp_dir, f"{before}#.png")
+        # Use #### for frame numbers in oiiotool (it expects 4 hash marks for frame numbers)
+        input_pattern = os.path.join(img_folder, f"{before}####.exr")
+        output_pattern = os.path.join(self.temp_dir, f"{before}####.png")
         
         conversion_cmd = [
             "oiiotool",
@@ -1055,8 +1057,8 @@ class FFmpegUI:
             "--frames", f"{start_frame}-{end_frame}",
             input_pattern,
             "--ch", "R,G,B",
-            "--iscolorspace", self.color_space_var.get(),
-            "--colorconvert", self.color_space_var.get(), "Output - sRGB",
+            "--iscolorspace", input_colorspace,
+            "--colorconvert", input_colorspace, output_colorspace,
             "-d", "uint8",
             "--compression", "none",
             "--no-clobber",
@@ -1075,84 +1077,70 @@ class FFmpegUI:
                 universal_newlines=True,
                 bufsize=1
             )
-            self.active_processes.append(process)  # Add process to active processes list
+            self.active_processes.append(process)
             print(f"\nDEBUG: Process started with PID: {process.pid}")
             self.queue.put(('output', f"\nDEBUG: Process started with PID: {process.pid}\n"))
-        except Exception as e:
-            error_msg = f"DEBUG: Error launching oiiotool: {e}"
-            print(error_msg)
-            self.queue.put(('error', error_msg))
-            return
-        
-        # Set non-blocking mode on the process stdout and stderr streams
-        import select, fcntl, time
-        def set_nonblocking(stream):
-            fd = stream.fileno()
-            fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-            fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-        set_nonblocking(process.stdout)
-        set_nonblocking(process.stderr)
-        
-        stdout_buffer = ""
-        stderr_buffer = ""
-        current_frame = 0
-        
-        stdout_closed = False
-        stderr_closed = False
 
-        # Updated non-blocking read loop: continue until both streams are closed.
-        while not (stdout_closed and stderr_closed):
-            streams = []
-            if not stdout_closed:
-                streams.append(process.stdout)
-            if not stderr_closed:
-                streams.append(process.stderr)
-            if streams:
-                rlist, _, _ = select.select(streams, [], [], 0.1)
-            else:
-                break
-            for stream in rlist:
+            current_frame = 0
+
+            def read_stderr():
+                nonlocal current_frame
                 try:
-                    ch = stream.read(1)
-                except Exception as ex:
-                    ch = ""
-                if ch == '':
-                    # Mark the stream as closed if empty read
-                    if stream == process.stdout:
-                        stdout_closed = True
-                    elif stream == process.stderr:
-                        stderr_closed = True
-                    continue
-                if stream == process.stdout:
-                    stdout_buffer += ch
-                    if ch in ['\n', '\r']:
-                        self.queue.put(('output', stdout_buffer))
-                        print("DEBUG: OIIO STDOUT:", stdout_buffer.strip())
-                        stdout_buffer = ""
-                elif stream == process.stderr:
-                    stderr_buffer += ch
-                    if ch in ['\n', '\r']:
-                        line = stderr_buffer.strip()
-                        self.queue.put(('output', stderr_buffer))
-                        print("DEBUG: OIIO STDERR:", line)
+                    for line in iter(process.stderr.readline, ''):
+                        self.queue.put(('output', line))
+                        print(f"STDERR: {line.strip()}")
                         if "Writing" in line:
                             current_frame += 1
                             progress = (current_frame / total_frames) * 100
                             status = f"Converting EXR frames: {current_frame}/{total_frames} ({progress:.1f}%)"
                             self.queue.put(('progress', (progress, status)))
-                        stderr_buffer = ""
-            time.sleep(0.01)
-        
-        # Flush any remaining output from the streams.
-        remaining_stdout = process.stdout.read()
-        if remaining_stdout:
-            self.queue.put(('output', remaining_stdout))
-        remaining_stderr = process.stderr.read()
-        if remaining_stderr:
-            self.queue.put(('output', remaining_stderr))
-        
-        return_code = process.wait()
-        self.read_process_output(process, total_frames)
+                except Exception as e:
+                    print(f"Stderr reader error: {str(e)}")
+                    self.queue.put(('output', f"\nError Reading Stderr: {str(e)}\n"))
+
+            def read_stdout():
+                try:
+                    for line in iter(process.stdout.readline, ''):
+                        print(f"STDOUT: {line.strip()}")
+                        self.queue.put(('output', line))
+                except Exception as e:
+                    print(f"Stdout reader error: {str(e)}")
+                    self.queue.put(('output', f"\nOutput Reader Error: {str(e)}\n"))
+
+            stdout_thread = threading.Thread(target=read_stdout)
+            stderr_thread = threading.Thread(target=read_stderr)
+            stdout_thread.daemon = True
+            stderr_thread.daemon = True
+            
+            # Store threads for cleanup
+            self.active_threads.extend([stdout_thread, stderr_thread])
+            
+            stdout_thread.start()
+            stderr_thread.start()
+
+            # Wait for process to complete
+            return_code = process.wait()
+            
+            # Wait for reader threads to finish
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
+
+            if return_code != 0:
+                error_message = f"oiiotool process failed with return code {return_code}"
+                print(f"DEBUG: {error_message}")
+                self.queue.put(('error', error_message))
+                return
+
+            # Store frame range for FFmpeg conversion
+            self.temp_frame_range = (start_frame, end_frame)
+            
+            # Proceed with FFmpeg conversion on the main thread
+            self.root.after(0, lambda: self.finish_exr_conversion_main_callback(start_frame, end_frame))
+
+        except Exception as e:
+            error_msg = f"Error during EXR conversion: {str(e)}"
+            print(f"DEBUG: {error_msg}")
+            self.queue.put(('error', error_msg))
 
     def finish_exr_conversion_main_callback(self, start_frame, end_frame):
         """
