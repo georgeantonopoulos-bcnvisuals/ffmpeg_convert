@@ -41,6 +41,7 @@ DEFAULT_SETTINGS = {
     "last_input_folder": "",
     "last_output_folder": "",
     "frame_rate": "60",
+    "source_frame_rate": "60",  # Added source frame rate
     "desired_duration": "15",
     "codec": "h265",
     "mp4_bitrate": "30",
@@ -220,38 +221,44 @@ class FFmpegUI:
         self.codec_dropdown.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
 
-        # Frame Rate Selection
-        ttk.Label(root, text="Frame Rate (fps):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        # Frame Rate Selection - modify this section
+        ttk.Label(root, text="Source Frame Rate (fps):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        self.source_frame_rate = ttk.Entry(root)
+        self.source_frame_rate.insert(0, self.settings.get("source_frame_rate", "60"))
+        self.source_frame_rate.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.source_frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
+
+        ttk.Label(root, text="Output Frame Rate (fps):", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
         self.frame_rate = ttk.Entry(root)
         self.frame_rate.insert(0, self.settings["frame_rate"])
-        self.frame_rate.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.frame_rate.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
 
         # Desired Duration Input
-        ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
         self.desired_duration = ttk.Entry(root)
         self.desired_duration.insert(0, self.settings["desired_duration"])
-        self.desired_duration.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.desired_duration.grid(row=6, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.desired_duration.bind("<KeyRelease>", self.update_duration)  # Update duration on duration change
 
         # Output File Name
-        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=7, column=0, sticky="w", padx=10, pady=5)
         self.output_filename = ttk.Entry(root)
         self.output_filename.insert(0, "output.mp4")
-        self.output_filename.grid(row=6, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.output_filename.grid(row=7, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
         # Output Folder Selection
-        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=7, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=8, column=0, sticky="w", padx=10, pady=5)
         self.output_folder = ttk.Entry(root)
-        self.output_folder.grid(row=7, column=1, sticky="ew", padx=10, pady=5)
+        self.output_folder.grid(row=8, column=1, sticky="ew", padx=10, pady=5)
         # Initialize output folder from settings
         if self.settings["last_output_folder"]:
             self.output_folder.insert(0, self.settings["last_output_folder"])
-        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=7, column=2, padx=10, pady=5)
+        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=8, column=2, padx=10, pady=5)
 
         # Add ACES color space selection
         self.aces_frame = ttk.Frame(root)
-        self.aces_frame.grid(row=8, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.aces_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.aces_frame.grid_remove()  # Initially hidden
 
         ttk.Label(self.aces_frame, text="EXR Color Space:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=5, pady=5)
@@ -274,14 +281,14 @@ class FFmpegUI:
         self.color_space_dropdown['values'] = self.color_spaces
 
         # Move the Run FFmpeg button to after the ACES frame
-        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=9, column=1, pady=20)
+        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=10, column=1, pady=20)
 
         # Codec-specific options frames
         self.h264_h265_frame = ttk.Frame(root)
-        self.h264_h265_frame.grid(row=10, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.h264_h265_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
 
         self.prores_frame = ttk.Frame(root)
-        self.prores_frame.grid(row=10, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.prores_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.prores_frame.grid_remove()  # Initially hidden
 
         # Initialize codec-specific variables
@@ -314,21 +321,21 @@ class FFmpegUI:
         # Progress Bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(root, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.grid(row=11, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
+        self.progress_bar.grid(row=12, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
 
         # Status Label
         self.status_label = ttk.Label(root, text="", font=self.custom_font)
-        self.status_label.grid(row=12, column=0, columnspan=3, padx=10, pady=(5,20))
+        self.status_label.grid(row=13, column=0, columnspan=3, padx=10, pady=(5,20))
 
         # FFmpeg Output Text Widget
         self.output_text = tk.Text(root, height=10, width=80, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff')
-        self.output_text.grid(row=13, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
+        self.output_text.grid(row=14, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
         self.output_scrollbar = ttk.Scrollbar(root, orient='vertical', command=self.output_text.yview)
-        self.output_scrollbar.grid(row=13, column=3, sticky='ns')
+        self.output_scrollbar.grid(row=14, column=3, sticky='ns')
         self.output_text['yscrollcommand'] = self.output_scrollbar.set
 
         # Configure the new row to expand
-        root.grid_rowconfigure(13, weight=1)
+        root.grid_rowconfigure(14, weight=1)
 
         # Initialize codec-specific UI based on default selection
         self.update_codec()
@@ -546,6 +553,7 @@ class FFmpegUI:
             "last_input_folder": self.img_seq_folder.get(),
             "last_output_folder": self.output_folder.get(),
             "frame_rate": self.frame_rate.get(),
+            "source_frame_rate": self.source_frame_rate.get(),  # Added source frame rate
             "desired_duration": self.desired_duration.get(),
             "codec": self.codec_var.get(),
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else DEFAULT_SETTINGS["mp4_bitrate"],
@@ -619,11 +627,24 @@ class FFmpegUI:
         # This method now calculates the scale factor based on desired duration and frame rate
         if hasattr(self, 'total_frames') and self.total_frames > 0:
             try:
-                frame_rate = float(self.frame_rate.get())
+                source_frame_rate = float(self.source_frame_rate.get())
+                output_frame_rate = float(self.frame_rate.get())
                 desired_duration = float(self.desired_duration.get())
-                if frame_rate <= 0 or desired_duration <= 0:
+                
+                if source_frame_rate <= 0 or output_frame_rate <= 0 or desired_duration <= 0:
                     raise ValueError
-                scale_factor = desired_duration * frame_rate / self.total_frames
+                    
+                # Original duration of sequence at source frame rate
+                original_duration = self.total_frames / source_frame_rate
+                
+                # Calculate the exact number of frames needed for the desired duration at output frame rate
+                total_frames_needed = int(round(output_frame_rate * desired_duration))
+                
+                # Calculate the actual duration based on the exact number of frames
+                actual_duration = total_frames_needed / output_frame_rate
+                
+                # Calculate scale factor for timestamp adjustment
+                scale_factor = desired_duration / original_duration
                 self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
                 print(f"Scale factor updated to: {scale_factor}")  # Debug statement
             except ValueError:
@@ -659,6 +680,11 @@ class FFmpegUI:
         pattern = self.filename_pattern.get()
         is_exr = pattern.lower().endswith('.exr')
 
+        # Check if frame_range exists before continuing
+        if not hasattr(self, 'frame_range'):
+            messagebox.showerror("Error", "No image sequence detected. Please select an image sequence folder first.")
+            return
+            
         # If input is EXR, run conversion in a separate thread
         if is_exr:
             # Ensure pattern includes '%04d'
@@ -734,24 +760,32 @@ class FFmpegUI:
         self.queue.put(('output', f"First frame path: {test_file}\n"))
 
         try:
-            framerate = float(self.frame_rate.get())
+            source_framerate = float(self.source_frame_rate.get())
+            output_framerate = float(self.frame_rate.get())
             desired_duration = float(self.desired_duration.get())
-            if framerate <= 0 or desired_duration <= 0:
+            
+            if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
+                
+            # Original duration of sequence at source frame rate
+            original_duration = self.total_frames / source_framerate
+            
+            # Calculate the exact number of frames needed for the desired duration at output frame rate
+            total_frames_needed = int(round(output_framerate * desired_duration))
+            
+            # Calculate the actual duration based on the exact number of frames
+            actual_duration = total_frames_needed / output_framerate
+            
+            # Calculate scale factor for timestamp adjustment
+            scale_factor = desired_duration / original_duration
         except ValueError:
-            self.queue.put(('error', "Please enter valid frame rate and desired duration."))
+            self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
-
-        # Calculate the exact number of frames needed for the desired duration
-        total_frames_needed = int(round(framerate * desired_duration))
-
-        # Calculate the actual duration based on the exact number of frames
-        actual_duration = total_frames_needed / framerate
 
         output_file = self.output_filename.get().strip()
         output_dir = self.output_folder.get()
 
-        if not all([img_folder, pattern, framerate, output_file, output_dir]):
+        if not all([img_folder, pattern, output_framerate, output_file, output_dir]):
             self.queue.put(('error', "Please fill in all fields."))
             return
 
@@ -771,6 +805,7 @@ class FFmpegUI:
             input_path = os.path.join(img_folder, input_pattern)
             input_args = [
                 "-start_number", str(start_frame),
+                "-framerate", str(source_framerate),  # Use source frame rate for input
                 "-i", input_path
             ]
         else:
@@ -821,9 +856,8 @@ class FFmpegUI:
             self.queue.put(('error', "Unsupported codec selected."))
             return
 
-        # Calculate scale factor with higher precision
-        scale_factor = total_frames_needed / (self.total_frames - 1)
-        setpts_filter = f"setpts={scale_factor:.10f}*PTS, setpts=PTS-STARTPTS"
+        # Use a single setpts filter with the calculated scale factor
+        setpts_filter = f"setpts={scale_factor:.10f}*PTS"
         ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
         ffmpeg_filter_args = ["-vf", ffmpeg_filters]
         frames_arg = ["-frames:v", str(total_frames_needed)]
@@ -838,10 +872,9 @@ class FFmpegUI:
             "ffmpeg",
             "-accurate_seek",
             "-ss", "0",
-            "-t", f"{desired_duration:.6f}",
-            "-framerate", f"{framerate}"
+            "-t", f"{desired_duration:.6f}"
         ] + input_args + [
-            "-r", str(framerate),
+            "-r", str(output_framerate),  # Use output frame rate for output
             "-vsync", "cfr"
         ] + ffmpeg_filter_args + frames_arg + [
             "-pix_fmt", "yuv420p",
