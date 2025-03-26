@@ -1,3 +1,5 @@
+print("Debug: ffmpeg_ui.py script started")  # <-- ADD THIS LINE at the VERY TOP of the file
+
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import subprocess
@@ -9,18 +11,37 @@ import threading
 from tkinter.font import Font
 import queue
 import sys
-import importlib
-import inspect
+import glob  # Added for globbing converted files
+import select, fcntl, time
+import signal  # Add at the top with other imports
+import shutil  # Add import for directory operations
 
-# Add this at the start of your script
-sys.stdout = open('ffmpeg_ui.log', 'a')
-sys.stderr = open('ffmpeg_ui.error.log', 'a')
+# Create a custom logger class to duplicate output
+class TeeLogger:
+    def __init__(self, filename, mode='a', stream=None):
+        self.file = open(filename, mode)
+        self.stream = stream if stream else sys.stdout
+        
+    def write(self, data):
+        self.file.write(data)
+        self.file.flush()
+        self.stream.write(data)
+        self.stream.flush()
+        
+    def flush(self):
+        self.file.flush()
+        self.stream.flush()
+
+# Redirect stdout/stderr to both log files and console
+sys.stdout = TeeLogger('ffmpeg_ui.log', 'a', sys.stdout)
+sys.stderr = TeeLogger('ffmpeg_ui.error.log', 'a', sys.stderr)
 
 # Default settings
 DEFAULT_SETTINGS = {
     "last_input_folder": "",
     "last_output_folder": "",
     "frame_rate": "60",
+    "source_frame_rate": "60",  # Added source frame rate
     "desired_duration": "15",
     "codec": "h265",
     "mp4_bitrate": "30",
@@ -36,6 +57,22 @@ def check_and_install_dependencies():
             return True
         except subprocess.CalledProcessError:
             return False
+
+    # Check for oiiotool
+    try:
+        oiiotool_result = subprocess.run(['which', 'oiiotool'], capture_output=True, text=True)
+        if oiiotool_result.returncode != 0:
+            print("ERROR: oiiotool not found in system path!")
+            print("Please install OpenImageIO tools using your package manager:")
+            print("For CentOS/RHEL: sudo dnf install OpenImageIO-tools")
+            print("For Ubuntu/Debian: sudo apt-get install openimageio-tools")
+            sys.exit(1)
+        else:
+            print(f"Found oiiotool at: {oiiotool_result.stdout.strip()}")
+    except Exception as e:
+        print(f"Error checking for oiiotool: {e}")
+        print("Please ensure OpenImageIO tools are installed.")
+        sys.exit(1)
 
     # Check for tkinter
     try:
@@ -71,6 +108,24 @@ class FFmpegUI:
         self.root.configure(bg='#2b2b2b')
         self.root.geometry("800x700")  # Increased height to accommodate new label
         self.root.minsize(600, 400)    # Set minimum window size
+
+        # Create tmp_files directory in script location
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.base_temp_dir = os.path.join(script_dir, "tmp_files")
+        if not os.path.exists(self.base_temp_dir):
+            os.makedirs(self.base_temp_dir)
+
+        # Store active processes and their reader threads
+        self.active_processes = []
+        self.active_threads = []
+        self.is_shutting_down = False  # Add flag to prevent multiple cleanup attempts
+        
+        # Set up signal handlers
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+        
+        # Add cleanup handler for window close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Load settings
         self.settings = self.load_settings()
@@ -121,6 +176,16 @@ class FFmpegUI:
         for i in range(12):  # Increased range to accommodate new widgets
             self.root.grid_rowconfigure(i, weight=1)
 
+        # Configure progress bar style
+        self.style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor='#2b2b2b',
+            background='#00ff00',
+            darkcolor='#00cc00',
+            lightcolor='#00ee00',
+            bordercolor='#2b2b2b'
+        )
+
         # Configure Combobox style for dark selection
         self.style.map('TCombobox',
             selectbackground=[('readonly', '#404040')],
@@ -156,44 +221,74 @@ class FFmpegUI:
         self.codec_dropdown.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
 
-        # Frame Rate Selection
-        ttk.Label(root, text="Frame Rate (fps):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        # Frame Rate Selection - modify this section
+        ttk.Label(root, text="Source Frame Rate (fps):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
+        self.source_frame_rate = ttk.Entry(root)
+        self.source_frame_rate.insert(0, self.settings.get("source_frame_rate", "60"))
+        self.source_frame_rate.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.source_frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
+
+        ttk.Label(root, text="Output Frame Rate (fps):", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
         self.frame_rate = ttk.Entry(root)
         self.frame_rate.insert(0, self.settings["frame_rate"])
-        self.frame_rate.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.frame_rate.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
 
         # Desired Duration Input
-        ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
         self.desired_duration = ttk.Entry(root)
         self.desired_duration.insert(0, self.settings["desired_duration"])
-        self.desired_duration.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.desired_duration.grid(row=6, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
         self.desired_duration.bind("<KeyRelease>", self.update_duration)  # Update duration on duration change
 
         # Output File Name
-        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=7, column=0, sticky="w", padx=10, pady=5)
         self.output_filename = ttk.Entry(root)
         self.output_filename.insert(0, "output.mp4")
-        self.output_filename.grid(row=6, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+        self.output_filename.grid(row=7, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
 
         # Output Folder Selection
-        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=7, column=0, sticky="w", padx=10, pady=5)
+        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=8, column=0, sticky="w", padx=10, pady=5)
         self.output_folder = ttk.Entry(root)
-        self.output_folder.grid(row=7, column=1, sticky="ew", padx=10, pady=5)
+        self.output_folder.grid(row=8, column=1, sticky="ew", padx=10, pady=5)
         # Initialize output folder from settings
         if self.settings["last_output_folder"]:
             self.output_folder.insert(0, self.settings["last_output_folder"])
-        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=7, column=2, padx=10, pady=5)
+        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=8, column=2, padx=10, pady=5)
 
-        # Run Button
-        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=8, column=1, pady=20)
+        # Add ACES color space selection
+        self.aces_frame = ttk.Frame(root)
+        self.aces_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.aces_frame.grid_remove()  # Initially hidden
+
+        ttk.Label(self.aces_frame, text="EXR Color Space:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.color_space_var = tk.StringVar(value="ACES - ACEScg")
+        self.color_space_dropdown = ttk.Combobox(self.aces_frame, textvariable=self.color_space_var, state="readonly", width=40)
+        self.color_space_dropdown.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
+        
+        # Common ACES color spaces
+        self.color_spaces = [
+            "ACES - ACEScg",
+            "ACES - ACES2065-1",
+            "Input - ARRI - Linear - ALEXA Wide Gamut",
+            "Input - RED - Linear - REDWideGamutRGB",
+            "Input - Sony - Linear - S-Gamut3",
+            "Input - Sony - Linear - S-Gamut3.Cine",
+            "Input - Canon - Linear - Canon Cinema Gamut Daylight",
+            "Utility - Linear - Rec.709",
+            "Utility - Linear - sRGB"
+        ]
+        self.color_space_dropdown['values'] = self.color_spaces
+
+        # Move the Run FFmpeg button to after the ACES frame
+        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=10, column=1, pady=20)
 
         # Codec-specific options frames
         self.h264_h265_frame = ttk.Frame(root)
-        self.h264_h265_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.h264_h265_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
 
         self.prores_frame = ttk.Frame(root)
-        self.prores_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.prores_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.prores_frame.grid_remove()  # Initially hidden
 
         # Initialize codec-specific variables
@@ -226,21 +321,21 @@ class FFmpegUI:
         # Progress Bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(root, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.grid(row=10, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
+        self.progress_bar.grid(row=12, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
 
         # Status Label
         self.status_label = ttk.Label(root, text="", font=self.custom_font)
-        self.status_label.grid(row=11, column=0, columnspan=3, padx=10, pady=(5,20))
+        self.status_label.grid(row=13, column=0, columnspan=3, padx=10, pady=(5,20))
 
         # FFmpeg Output Text Widget
         self.output_text = tk.Text(root, height=10, width=80, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff')
-        self.output_text.grid(row=12, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
+        self.output_text.grid(row=14, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
         self.output_scrollbar = ttk.Scrollbar(root, orient='vertical', command=self.output_text.yview)
-        self.output_scrollbar.grid(row=12, column=3, sticky='ns')
+        self.output_scrollbar.grid(row=14, column=3, sticky='ns')
         self.output_text['yscrollcommand'] = self.output_scrollbar.set
 
         # Configure the new row to expand
-        root.grid_rowconfigure(12, weight=1)
+        root.grid_rowconfigure(14, weight=1)
 
         # Initialize codec-specific UI based on default selection
         self.update_codec()
@@ -267,26 +362,26 @@ class FFmpegUI:
     def update_filename_pattern(self, folder):
         try:
             files = os.listdir(folder)
-            image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
+            image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.exr'))]
             
             if image_files:
-                # Group files by their base pattern (everything before the frame number)
+                # Group files by their base pattern
                 sequence_groups = {}
                 for filename in image_files:
-                    # Split the filename into parts
-                    base, ext = os.path.splitext(filename)  # First split off the final extension
-                    if '.' in base:  # If there's another dot (for frame number)
-                        pattern_base, frame_number = base.rsplit('.', 1)  # Split at the last dot before extension
-                        if frame_number.isdigit():  # Only process if the part between dots is a number
+                    base, ext = os.path.splitext(filename)
+                    is_exr = ext.lower() == '.exr'  # Check if file is EXR
+                    if '.' in base:
+                        pattern_base, frame_number = base.rsplit('.', 1)
+                        if frame_number.isdigit():
                             if pattern_base not in sequence_groups:
                                 sequence_groups[pattern_base] = []
-                            sequence_groups[pattern_base].append(filename)
+                            sequence_groups[pattern_base].append((filename, is_exr))
                 
                 # Convert groups to collections
                 all_collections = []
                 for base_pattern, files in sequence_groups.items():
                     if len(files) > 1:  # Only create a collection if there are multiple files
-                        collection_files = sorted(files)  # Sort files to ensure proper order
+                        collection_files = sorted([f for f, _ in files])
                         collections, remainder = clique.assemble(collection_files)
                         all_collections.extend(collections)
                 
@@ -345,12 +440,18 @@ class FFmpegUI:
                                 selected_idx = selection[0]
                                 collection = dialog.collections[selected_idx]
                                 # Update the UI with selected sequence
-                                pattern = f"{collection.head}%0{collection.padding}d{collection.tail}"
+                                pattern = f"{collection.head}%04d{collection.tail}"  # Force 4-digit padding
                                 self.filename_pattern.delete(0, tk.END)
                                 self.filename_pattern.insert(0, pattern)
                                 
                                 self.frame_range = (min(collection.indexes), max(collection.indexes))
                                 self.total_frames = len(collection.indexes)
+                                
+                                # Show/hide ACES frame based on file type
+                                if pattern.lower().endswith('.exr'):
+                                    self.aces_frame.grid()
+                                else:
+                                    self.aces_frame.grid_remove()
                                 
                                 # Update output filename
                                 output_name = collection.head.rstrip('_.')
@@ -381,9 +482,15 @@ class FFmpegUI:
                     else:
                         # Single sequence found - use existing logic
                         collection = all_collections[0]
-                        pattern = f"{collection.head}%0{collection.padding}d{collection.tail}"
+                        pattern = f"{collection.head}%04d{collection.tail}"
                         self.filename_pattern.delete(0, tk.END)
                         self.filename_pattern.insert(0, pattern)
+                        
+                        # Show/hide ACES frame based on file type
+                        if pattern.lower().endswith('.exr'):
+                            self.aces_frame.grid()
+                        else:
+                            self.aces_frame.grid_remove()
                         
                         self.frame_range = (min(collection.indexes), max(collection.indexes))
                         self.total_frames = len(collection.indexes)
@@ -446,6 +553,7 @@ class FFmpegUI:
             "last_input_folder": self.img_seq_folder.get(),
             "last_output_folder": self.output_folder.get(),
             "frame_rate": self.frame_rate.get(),
+            "source_frame_rate": self.source_frame_rate.get(),  # Added source frame rate
             "desired_duration": self.desired_duration.get(),
             "codec": self.codec_var.get(),
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else DEFAULT_SETTINGS["mp4_bitrate"],
@@ -519,23 +627,33 @@ class FFmpegUI:
         # This method now calculates the scale factor based on desired duration and frame rate
         if hasattr(self, 'total_frames') and self.total_frames > 0:
             try:
-                frame_rate = float(self.frame_rate.get())
+                source_frame_rate = float(self.source_frame_rate.get())
+                output_frame_rate = float(self.frame_rate.get())
                 desired_duration = float(self.desired_duration.get())
-                if frame_rate <= 0 or desired_duration <= 0:
+                
+                if source_frame_rate <= 0 or output_frame_rate <= 0 or desired_duration <= 0:
                     raise ValueError
-                scale_factor = desired_duration * frame_rate / self.total_frames
+                    
+                # Original duration of sequence at source frame rate
+                original_duration = self.total_frames / source_frame_rate
+                
+                # Calculate the exact number of frames needed for the desired duration at output frame rate
+                total_frames_needed = int(round(output_frame_rate * desired_duration))
+                
+                # Calculate the actual duration based on the exact number of frames
+                actual_duration = total_frames_needed / output_frame_rate
+                
+                # Calculate scale factor for timestamp adjustment
+                scale_factor = desired_duration / original_duration
                 self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
                 print(f"Scale factor updated to: {scale_factor}")  # Debug statement
-                # Optionally, update a label or status to show scale factor
             except ValueError:
                 self.scale_factor = None
-                # Optionally, display an error message or indicator
         else:
             self.scale_factor = None
 
     def run_ffmpeg(self):
-        print("\nDEBUG -- VALIDATION CHECK")
-        print(f"Line number: {inspect.currentframe().f_lineno}")
+        print("Debug: run_ffmpeg function called")
 
         # For now, we'll force image sequence mode since video file handling isn't fully implemented
         input_type = "Image Sequence"
@@ -543,19 +661,76 @@ class FFmpegUI:
         output_file = self.output_filename.get().strip()
         codec = self.codec_var.get()
 
-        print(f"Input Type: {input_type}")
-        print(f"Output Dir: {output_dir}")
-        print(f"Output File: {output_file}")
-        print(f"Codec: {codec}")
+        print(f"=== Starting run_ffmpeg ===")
+        print("Initial values:")
+        print(f"- Input type: {input_type}")
+        print(f"- Output dir: {output_dir}")
+        print(f"- Output file: {output_file}")
+        print(f"- Codec: {codec}")
 
-        # Check input directory and files
+        # Check input directory
         img_folder = self.img_seq_folder.get()
+        print(f"\nChecking input folder: {img_folder}")
         if not os.path.exists(img_folder):
+            print("Error: Input folder does not exist")
             messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
             return
 
-        # Get and validate output directory
-        output_dir = self.output_folder.get().strip()
+        # Get filename pattern from UI
+        pattern = self.filename_pattern.get()
+        is_exr = pattern.lower().endswith('.exr')
+
+        # Check if frame_range exists before continuing
+        if not hasattr(self, 'frame_range'):
+            messagebox.showerror("Error", "No image sequence detected. Please select an image sequence folder first.")
+            return
+            
+        # If input is EXR, run conversion in a separate thread
+        if is_exr:
+            # Ensure pattern includes '%04d'
+            if "%04d" in pattern:
+                before, after = pattern.split("%04d", 1)
+            else:
+                messagebox.showerror("Error", "Filename pattern must contain '%04d' for image sequence.")
+                return
+
+            # start_frame and end_frame are expected to have been set during sequence detection
+            if not hasattr(self, 'frame_range'):
+                messagebox.showerror("Error", "Frame range not detected. Please select the image sequence folder again.")
+                return
+            start_frame, end_frame = self.frame_range
+            
+            # Store all parameters for second stage processing
+            self.exr_conversion_params = {
+                'output_framerate': float(self.frame_rate.get()),
+                'source_framerate': float(self.source_frame_rate.get()),
+                'desired_duration': float(self.desired_duration.get()),
+                'codec': codec,
+                'output_dir': output_dir,
+                'output_file': output_file
+            }
+            
+            # Store codec-specific parameters
+            if codec in ["h264", "h265"]:
+                self.exr_conversion_params.update({
+                    'bitrate': self.mp4_bitrate.get(),
+                    'crf': self.mp4_crf.get()
+                })
+            elif codec.startswith("prores"):
+                self.exr_conversion_params.update({
+                    'profile': self.prores_profile.get(),
+                    'qscale': self.prores_qscale.get()
+                })
+
+            # Launch the conversion in a separate thread so that the UI isn't blocked.
+            conversion_thread = threading.Thread(
+                target=self.convert_exr_files,
+                args=(img_folder, pattern, start_frame, end_frame, before)
+            )
+            conversion_thread.start()
+            return  # Return immediately so that the UI remains responsive
+
+        # Validate output directory
         if not output_dir:
             messagebox.showerror("Error", "Please select an output directory")
             return
@@ -591,44 +766,48 @@ class FFmpegUI:
             if not response:
                 return
 
-        if not os.access(img_folder, os.R_OK):
+        if not os.path.exists(img_folder) or not os.access(img_folder, os.R_OK):
             messagebox.showerror("Error", f"Cannot read from input folder: {img_folder}")
             return
 
         # Verify at least one input file exists
-        pattern = self.filename_pattern.get()
         test_file = os.path.join(img_folder, pattern % self.frame_range[0])
         if not os.path.exists(test_file):
             messagebox.showerror("Error", f"Cannot find first frame: {test_file}")
             return
 
-        # Add debug output
+        # Debug output
         self.queue.put(('output', f"Input folder: {img_folder}\n"))
         self.queue.put(('output', f"Output directory: {output_dir}\n"))
         self.queue.put(('output', f"First frame path: {test_file}\n"))
 
-        img_folder = self.img_seq_folder.get()
-        pattern = self.filename_pattern.get()
-        codec = self.codec_var.get()
         try:
-            framerate = float(self.frame_rate.get())
+            source_framerate = float(self.source_frame_rate.get())
+            output_framerate = float(self.frame_rate.get())
             desired_duration = float(self.desired_duration.get())
-            if framerate <= 0 or desired_duration <= 0:
+            
+            if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
+                
+            # Original duration of sequence at source frame rate
+            original_duration = self.total_frames / source_framerate
+            
+            # Calculate the exact number of frames needed for the desired duration at output frame rate
+            total_frames_needed = int(round(output_framerate * desired_duration))
+            
+            # Calculate the actual duration based on the exact number of frames
+            actual_duration = total_frames_needed / output_framerate
+            
+            # Calculate scale factor for timestamp adjustment
+            scale_factor = desired_duration / original_duration
         except ValueError:
-            self.queue.put(('error', "Please enter valid frame rate and desired duration."))
+            self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
-
-        # Calculate the exact number of frames needed for the desired duration
-        total_frames_needed = int(round(framerate * desired_duration))  # Added round() function
-
-        # Calculate the actual duration based on the exact number of frames
-        actual_duration = total_frames_needed / framerate
 
         output_file = self.output_filename.get().strip()
         output_dir = self.output_folder.get()
 
-        if not all([img_folder, pattern, framerate, output_file, output_dir]):
+        if not all([img_folder, pattern, output_framerate, output_file, output_dir]):
             self.queue.put(('error', "Please fill in all fields."))
             return
 
@@ -637,23 +816,18 @@ class FFmpegUI:
         
         # Ensure the output filename does not end with a dot or underscore
         output_file_base = output_file.rstrip('_.')
-        
-        # Split the filename to remove any existing extension
         output_file_base, _ = os.path.splitext(output_file_base)
-        
-        # Ensure no trailing dots after splitting
         output_file_base = output_file_base.rstrip('.')
-        
-        # Append the correct extension
         output_file = f"{output_file_base}{file_extension}"
 
-        # Use the frame range information
+        # Use the frame range information to build ffmpeg input arguments
         if hasattr(self, 'frame_range') and self.total_frames > 0:
             start_frame, end_frame = self.frame_range
-            input_pattern = pattern  # Use the original pattern with correct padding
+            input_pattern = pattern  # Use the updated pattern
             input_path = os.path.join(img_folder, input_pattern)
             input_args = [
                 "-start_number", str(start_frame),
+                "-framerate", str(source_framerate),  # Use source frame rate for input
                 "-i", input_path
             ]
         else:
@@ -681,7 +855,7 @@ class FFmpegUI:
             ]
             if codec == "h264":
                 codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
-            else:  # h265
+            else:
                 codec_params.extend(["-tag:v", "hvc1"])
         elif codec.startswith("prores"):
             profile = self.prores_profile.get()
@@ -698,51 +872,41 @@ class FFmpegUI:
         elif codec == "qtrle":
             codec_params = [
                 "-c:v", "qtrle",
-                "-pix_fmt", "rgb24"  # Use rgb24 for Animation codec
+                "-pix_fmt", "rgb24"
             ]
         else:
             self.queue.put(('error', "Unsupported codec selected."))
             return
 
-        # Calculate scale factor with higher precision
-        scale_factor = total_frames_needed / (self.total_frames - 1)  # Adjusted for frame counting
-
-        # Use the exact scale factor in the setpts filter with higher precision
-        # Modified to include PTS-STARTPTS for clean timestamps
-        setpts_filter = f"setpts={scale_factor:.10f}*PTS, setpts=PTS-STARTPTS"
+        # Use a single setpts filter with the calculated scale factor
+        setpts_filter = f"setpts={scale_factor:.10f}*PTS"
         ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
-
         ffmpeg_filter_args = ["-vf", ffmpeg_filters]
-
-        # Add -frames:v argument to limit the number of output frames
         frames_arg = ["-frames:v", str(total_frames_needed)]
-
-        # Color space settings
         color_space_args = [
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
             "-colorspace", "bt709"
         ]
 
-        # Base ffmpeg command with precise NTSC timing parameters
+        # Construct the ffmpeg command
         cmd = [
             "ffmpeg",
             "-accurate_seek",
-            "-ss", "0",  # Start from beginning
-            "-t", f"{desired_duration:.6f}",  # Duration before input for better precision
-            "-framerate", f"{framerate}"  # Use exact framerate from user input
+            "-ss", "0",
+            "-t", f"{desired_duration:.6f}"
         ] + input_args + [
-            "-r", str(framerate),  # Set output framerate
-            "-vsync", "cfr"  # Moved -vsync cfr immediately after input
+            "-r", str(output_framerate),  # Use output frame rate for output
+            "-vsync", "cfr"
         ] + ffmpeg_filter_args + frames_arg + [
             "-pix_fmt", "yuv420p",
-            "-video_track_timescale", "30000",  # Proper NTSC timing
+            "-video_track_timescale", "30000",
             "-an"
         ] + codec_params + color_space_args + [
             output_path
         ]
 
-        print("FFmpeg command:", " ".join(cmd))  # Debug statement
+        print("FFmpeg command:", " ".join(cmd))
 
         # Execute the ffmpeg command in a separate thread
         thread = threading.Thread(target=self.execute_ffmpeg, args=(cmd, output_path, actual_duration))
@@ -750,8 +914,8 @@ class FFmpegUI:
 
     def execute_ffmpeg(self, cmd, output_path, actual_duration):
         try:
-            # Start FFmpeg process
             self.queue.put(('output', "Starting FFmpeg process...\n"))
+            print(f"\nExecuting FFmpeg command:\n{' '.join(cmd)}\n")
             
             process = subprocess.Popen(
                 cmd, 
@@ -760,33 +924,49 @@ class FFmpegUI:
                 universal_newlines=True,
                 bufsize=1
             )
+            self.active_processes.append(process)  # Add process to active processes list
             
             self.queue.put(('output', f"Process started with PID: {process.pid}\n"))
+            print(f"FFmpeg process started with PID: {process.pid}")
 
-            # Function to read stdout
-            def read_stdout():
-                try:
-                    for line in process.stdout:
-                        self.queue.put(('output', line))
-                        if "frame=" in line:
-                            match = re.search(r'frame=\s*(\d+)', line)
-                            if match:
-                                current_frame = int(match.group(1)) + self.frame_range[0] - 1
-                                progress = (current_frame - self.frame_range[0] + 1) / self.total_frames * 100
-                                status = f"Processing frame {current_frame} of {self.frame_range[0] + self.total_frames - 1}"
-                                self.queue.put(('progress', (progress, status)))
-                except Exception as e:
-                    self.queue.put(('output', f"\nOutput Reader Error: {str(e)}\n"))
-
-            # Function to read stderr
             def read_stderr():
                 try:
-                    for line in process.stderr:
-                        self.queue.put(('output', f"ERROR: {line}"))
+                    print("Starting stderr reader thread")
+                    for line in iter(process.stderr.readline, ''):
+                        self.queue.put(('output', line))
+                        print(f"STDERR: {line.strip()}")
+                        if "frame=" in line:
+                            try:
+                                frame_match = re.search(r'frame=\s*(\d+)', line)
+                                time_match = re.search(r'time=\s*(\d+:\d+:\d+\.\d+)', line)
+                                speed_match = re.search(r'speed=\s*(\d+\.\d+)x', line)
+                                
+                                if frame_match:
+                                    current_frame = int(frame_match.group(1))
+                                    progress = (current_frame / self.total_frames) * 100 if self.total_frames > 0 else 0
+                                    status_parts = [f"Frame: {current_frame}/{self.total_frames}"]
+                                    if time_match:
+                                        status_parts.append(f"Time: {time_match.group(1)}")
+                                    if speed_match:
+                                        status_parts.append(f"Speed: {speed_match.group(1)}x")
+                                    status = " | ".join(status_parts)
+                                    self.queue.put(('progress', (progress, status)))
+                            except Exception as e:
+                                print(f"Error parsing progress: {str(e)}")
                 except Exception as e:
+                    print(f"Stderr reader error: {str(e)}")
                     self.queue.put(('output', f"\nError Reading Stderr: {str(e)}\n"))
 
-            # Start threads to read stdout and stderr
+            def read_stdout():
+                try:
+                    print("Starting stdout reader thread")
+                    for line in iter(process.stdout.readline, ''):
+                        print(f"STDOUT: {line.strip()}")
+                        self.queue.put(('output', line))
+                except Exception as e:
+                    print(f"Stdout reader error: {str(e)}")
+                    self.queue.put(('output', f"\nOutput Reader Error: {str(e)}\n"))
+
             stdout_thread = threading.Thread(target=read_stdout)
             stderr_thread = threading.Thread(target=read_stderr)
             stdout_thread.daemon = True
@@ -794,13 +974,30 @@ class FFmpegUI:
             stdout_thread.start()
             stderr_thread.start()
 
-            # Wait for FFmpeg process to complete
             process.wait()
-            stdout_thread.join()
-            stderr_thread.join()
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
+
+            # Clean up temp directory if it exists and ffmpeg completed successfully
+            if process.returncode == 0 and hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
+                try:
+                    print(f"DEBUG: Cleaning up temp directory after successful conversion: {self.temp_dir}")
+                    self.queue.put(('output', f"Cleaning up temporary files...\n"))
+                    shutil.rmtree(self.temp_dir)
+                    print(f"Cleaned up temp directory: {self.temp_dir}")
+                except Exception as e:
+                    print(f"Warning: Could not clean up temp directory: {e}")
+                    self.queue.put(('output', f"Warning: Could not clean up temp files: {e}\n"))
 
             if process.returncode != 0:
-                self.queue.put(('error', f"FFmpeg process returned {process.returncode}"))
+                error_message = f"FFmpeg process returned {process.returncode}"
+                try:
+                    remaining_error = process.stderr.read()
+                    if remaining_error:
+                        error_message += f"\nError details:\n{remaining_error}"
+                except:
+                    pass
+                self.queue.put(('error', error_message))
             else:
                 success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
                 self.queue.put(('success', success_message))
@@ -825,11 +1022,507 @@ class FFmpegUI:
                     self.progress_var.set(100)
                     self.status_label.config(text="Conversion complete")
                     messagebox.showinfo("Success", content)
+                elif msg_type == 'prepare_ffmpeg':
+                    # Handle FFmpeg preparation on main thread
+                    self.prepare_ffmpeg_conversion(content)
         except queue.Empty:
             pass
         finally:
-            # Schedule the next queue check
             self.root.after(100, self.process_queue)
+
+    def prepare_ffmpeg_conversion(self, params):
+        """Prepare and start FFmpeg conversion on the main thread"""
+        try:
+            # Update UI elements safely on main thread
+            self.img_seq_folder.delete(0, tk.END)
+            self.img_seq_folder.insert(0, params['temp_dir'])
+            
+            # Get all PNG files in temp directory
+            png_files = sorted([f for f in os.listdir(params['temp_dir']) if f.endswith('.png')])
+            collections, remainder = clique.assemble(png_files)
+            
+            if collections:
+                collection = collections[0]  # We know we only have one sequence
+                pattern = params['pattern']
+                self.filename_pattern.delete(0, tk.END)
+                self.filename_pattern.insert(0, pattern)
+                
+                # Set the frame range and total frames for FFmpeg
+                self.frame_range = params['frame_range']
+                self.total_frames = params['total_frames']
+                
+                # Start FFmpeg conversion safely on main thread
+                self.run_ffmpeg()
+            else:
+                self.queue.put(('error', "Failed to detect PNG sequence in temp directory"))
+        except Exception as e:
+            self.queue.put(('error', f"Error preparing FFmpeg conversion: {str(e)}"))
+
+    def convert_exr_files(self, img_folder, pattern, start_frame, end_frame, before):
+        print("\nDEBUG: convert_exr_files starting")
+        self.queue.put(('output', "\nDEBUG: Starting EXR conversion (thread)...\n"))
+        
+        # First try to create temp directory as a subdirectory of the input folder
+        temp_dir_name = f"ffmpeg_tmp_{os.getpid()}"
+        
+        # Try creating temp dir in input folder first
+        input_temp_dir = os.path.join(img_folder, temp_dir_name)
+        try:
+            os.makedirs(input_temp_dir, exist_ok=True)
+            # Test write permissions
+            test_file = os.path.join(input_temp_dir, ".permission_test")
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            self.temp_dir = input_temp_dir
+            print(f"DEBUG: Created temp dir in input folder: {self.temp_dir}")
+            self.queue.put(('output', f"DEBUG: Created temp dir in input folder: {self.temp_dir}\n"))
+        except (IOError, PermissionError) as e:
+            print(f"DEBUG: Cannot create temp dir in input folder: {e}")
+            self.queue.put(('output', f"DEBUG: Cannot create temp dir in input folder: {e}\n"))
+            
+            # Try /mnt/temporal/ffmpeg_tool_cache/ as second option
+            try:
+                mnt_temp_dir = "/mnt/temporal/ffmpeg_tool_cache"
+                os.makedirs(mnt_temp_dir, exist_ok=True)
+                self.temp_dir = os.path.join(mnt_temp_dir, temp_dir_name)
+                os.makedirs(self.temp_dir, exist_ok=True)
+                # Test write permissions
+                test_file = os.path.join(self.temp_dir, ".permission_test")
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                print(f"DEBUG: Created temp dir in /mnt/temporal: {self.temp_dir}")
+                self.queue.put(('output', f"DEBUG: Created temp dir in /mnt/temporal: {self.temp_dir}\n"))
+            except (IOError, PermissionError, FileNotFoundError) as e:
+                print(f"DEBUG: Cannot create temp dir in /mnt/temporal: {e}")
+                self.queue.put(('output', f"DEBUG: Cannot create temp dir in /mnt/temporal: {e}\n"))
+                
+                # Finally, use the original method with base_temp_dir
+                self.temp_dir = os.path.join(self.base_temp_dir, f"convert_{os.getpid()}")
+                try:
+                    os.makedirs(self.temp_dir, exist_ok=True)
+                    print(f"DEBUG: Created temp dir in base location: {self.temp_dir}")
+                    self.queue.put(('output', f"DEBUG: Created temp dir in base location: {self.temp_dir}\n"))
+                except Exception as e:
+                    # Last resort - try /tmp
+                    print(f"DEBUG: Cannot create temp dir in base location: {e}")
+                    self.queue.put(('output', f"DEBUG: Cannot create temp dir in base location: {e}\n"))
+                    self.temp_dir = os.path.join("/tmp", f"ffmpeg_tmp_{os.getpid()}")
+                    os.makedirs(self.temp_dir, exist_ok=True)
+                    print(f"DEBUG: Created temp dir in /tmp: {self.temp_dir}")
+                    self.queue.put(('output', f"DEBUG: Created temp dir in /tmp: {self.temp_dir}\n"))
+        
+        total_frames = end_frame - start_frame + 1
+        print("DEBUG: total_frames =", total_frames)
+        self.queue.put(('output', f"DEBUG: Total frames to convert: {total_frames}\n"))
+        
+        # Check if all PNG files already exist
+        all_files_exist = True
+        missing_frames = []
+        for frame in range(start_frame, end_frame + 1):
+            png_file = os.path.join(self.temp_dir, f"{before}{frame:04d}.png")
+            if not os.path.exists(png_file):
+                all_files_exist = False
+                missing_frames.append(frame)
+        
+        if all_files_exist:
+            print("DEBUG: All PNG files already exist, skipping conversion")
+            self.queue.put(('output', "All PNG files already exist, skipping conversion\n"))
+            self.queue.put(('progress', (100, "EXR conversion complete (skipped)")))
+            # Store frame range for FFmpeg conversion
+            self.temp_frame_range = (start_frame, end_frame)
+            # Proceed directly to FFmpeg conversion
+            new_pattern = f"{before}%04d.png"
+            print("DEBUG: Starting FFmpeg conversion with pattern:", new_pattern)
+            self.queue.put(('output', f"DEBUG: Starting FFmpeg conversion with pattern: {new_pattern}\n"))
+            self.root.after(0, lambda: self.finish_exr_conversion_main_callback(start_frame, end_frame))
+            return
+        
+        print(f"DEBUG: Need to convert {len(missing_frames)} frames")
+        self.queue.put(('output', f"Converting {len(missing_frames)} frames\n"))
+        
+        # Get selected color space names (preserve spaces, no underscores)
+        input_colorspace = self.color_space_var.get()
+        output_colorspace = "Output - sRGB"
+        
+        # Verify that at least the first input file exists
+        first_frame = missing_frames[0] if missing_frames else start_frame
+        input_file_pattern = os.path.join(img_folder, pattern)
+        test_file = input_file_pattern.replace("%04d", f"{first_frame:04d}")
+        if not os.path.exists(test_file):
+            error_msg = f"Input file not found: {test_file}"
+            print(f"DEBUG: {error_msg}")
+            self.queue.put(('error', error_msg))
+            return
+        
+        # Build command for individual files using the pattern from UI
+        cmds = []
+        for frame in missing_frames:
+            # Use the pattern directly from UI with proper frame substitution
+            input_file = input_file_pattern.replace("%04d", f"{frame:04d}")
+            output_file = os.path.join(self.temp_dir, f"{before}{frame:04d}.png")
+            
+            # Skip file if it already exists
+            if os.path.exists(output_file):
+                continue
+                
+            # Check if input file exists
+            if not os.path.exists(input_file):
+                error_msg = f"Input file not found: {input_file}"
+                print(f"DEBUG: {error_msg}")
+                self.queue.put(('error', error_msg))
+                return
+                
+            cmd = [
+                "oiiotool",
+                "-v",
+                "--colorconfig", "/mnt/studio/config/ocio/aces_1.2/config.ocio",
+                "--threads", "1",  # Use single thread per file
+                input_file,
+                "--ch", "R,G,B",
+                "--colorconvert", input_colorspace, output_colorspace,  # Preserve spaces, don't use underscores
+                "-d", "uint8",
+                "--compression", "none",
+                "--no-clobber",
+                "-o", output_file
+            ]
+            cmds.append((cmd, frame))
+            
+        if not cmds:
+            print("DEBUG: No valid frames to convert")
+            self.queue.put(('error', "No valid frames to convert. Check that input files exist."))
+            return
+            
+        # Print sample command for debugging
+        print("\nDEBUG: Sample conversion command:", " ".join(cmds[0][0]))
+        self.queue.put(('output', f"\nDEBUG: Will convert {len(cmds)} frames individually\n"))
+        
+        # Process files with a thread pool to speed things up but not overload the system
+        max_workers = min(os.cpu_count(), 8)  # Limit to 8 parallel processes max
+        total_files = len(cmds)
+        completed_files = 0
+        
+        try:
+            # Define a function to process one file
+            def process_file(cmd_info):
+                cmd, frame_num = cmd_info
+                try:
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        universal_newlines=True
+                    )
+                    stdout, stderr = process.communicate()
+                    
+                    # Return success/failure info
+                    return (frame_num, process.returncode, stderr if process.returncode != 0 else None)
+                except Exception as e:
+                    return (frame_num, -1, str(e))
+            
+            # Create and start worker threads
+            threads = []
+            active_workers = 0
+            cmd_queue = list(cmds)
+            results = []
+            
+            while cmd_queue or threads:
+                # Start new workers if we have capacity and commands
+                while active_workers < max_workers and cmd_queue:
+                    cmd_info = cmd_queue.pop(0)
+                    thread = threading.Thread(target=lambda c=cmd_info: results.append(process_file(c)))
+                    thread.daemon = True
+                    thread.start()
+                    threads.append(thread)
+                    active_workers += 1
+                
+                # Check for completed threads
+                still_active = []
+                for thread in threads:
+                    if thread.is_alive():
+                        still_active.append(thread)
+                    else:
+                        active_workers -= 1
+                        completed_files += 1
+                        # Update progress
+                        progress = (completed_files / total_files) * 100
+                        status = f"Converting EXR frames: {completed_files}/{total_files} ({progress:.1f}%)"
+                        self.queue.put(('progress', (progress, status)))
+                
+                threads = still_active
+                time.sleep(0.1)  # Don't hammer the CPU checking thread status
+            
+            # Check results
+            failures = [r for r in results if r[1] != 0]
+            if failures:
+                error_frames = ", ".join(str(f[0]) for f in failures[:5])
+                more_text = f" and {len(failures) - 5} more" if len(failures) > 5 else ""
+                error_msg = f"Failed to convert {len(failures)} frames (frames {error_frames}{more_text})"
+                print(f"DEBUG: {error_msg}")
+                self.queue.put(('error', error_msg))
+                return
+            
+            # If we get here, conversion was 100% successful
+            self.queue.put(('output', "EXR conversion completed successfully\n"))
+            
+            # Store frame range for FFmpeg conversion
+            self.temp_frame_range = (start_frame, end_frame)
+            
+            # Proceed with FFmpeg conversion on the main thread
+            self.root.after(0, lambda: self.finish_exr_conversion_main_callback(start_frame, end_frame))
+
+        except Exception as e:
+            error_msg = f"Error during EXR conversion: {str(e)}"
+            print(f"DEBUG: {error_msg}")
+            self.queue.put(('error', error_msg))
+
+    def finish_exr_conversion_main_callback(self, start_frame, end_frame):
+        """
+        This helper method is called on the main thread after successful EXR conversion.
+        It updates the UI (setting the input folder to the temporary PNG directory and
+        adjusting the filename pattern), retrieves all relevant user input parameters, and then
+        starts the FFmpeg conversion using those settings.
+        """
+        # Update input folder with the temporary directory path.
+        self.img_seq_folder.delete(0, tk.END)
+        self.img_seq_folder.insert(0, self.temp_dir)
+        
+        # Assemble the PNG sequence from the temporary directory.
+        png_files = sorted([f for f in os.listdir(self.temp_dir) if f.endswith('.png')])
+        
+        if not png_files:
+            self.queue.put(('error', "No PNG files found in temp directory"))
+            return
+            
+        # Verify all expected frames exist
+        expected_count = end_frame - start_frame + 1
+        if len(png_files) != expected_count:
+            error_msg = f"Expected {expected_count} PNG files but found {len(png_files)}"
+            self.queue.put(('error', error_msg))  # Use error instead of warning to stop process
+            return
+        
+        # Use clique to assemble the sequence properly
+        collections, _ = clique.assemble(png_files)
+        
+        if collections:
+            collection = collections[0]  # Assume only one sequence exists.
+            pattern = f"{collection.head}%04d{collection.tail}"
+            
+            # Update the filename pattern widget.
+            self.filename_pattern.delete(0, tk.END)
+            self.filename_pattern.insert(0, pattern)
+            
+            # Set the frame range and total frames for FFmpeg.
+            self.frame_range = self.temp_frame_range
+            self.total_frames = end_frame - start_frame + 1
+            
+            # Restore parameters from storage if available
+            if hasattr(self, 'exr_conversion_params'):
+                # Update UI widgets to match stored parameters
+                self.frame_rate.delete(0, tk.END)
+                self.frame_rate.insert(0, str(self.exr_conversion_params['output_framerate']))
+                
+                self.source_frame_rate.delete(0, tk.END)
+                self.source_frame_rate.insert(0, str(self.exr_conversion_params['source_framerate']))
+                
+                self.desired_duration.delete(0, tk.END)
+                self.desired_duration.insert(0, str(self.exr_conversion_params['desired_duration']))
+                
+                # Set the codec dropdown
+                self.codec_var.set(self.exr_conversion_params['codec'])
+                self.update_codec()  # Update the UI for the selected codec
+                
+                # Set codec-specific parameters
+                codec = self.exr_conversion_params['codec']
+                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate') and hasattr(self, 'mp4_crf'):
+                    self.mp4_bitrate.set(self.exr_conversion_params['bitrate'])
+                    self.mp4_crf.set(self.exr_conversion_params['crf'])
+                elif codec.startswith("prores") and hasattr(self, 'prores_profile') and hasattr(self, 'prores_qscale'):
+                    self.prores_profile.set(self.exr_conversion_params['profile'])
+                    self.prores_qscale.set(self.exr_conversion_params['qscale'])
+                
+                # Set output file and folder
+                self.output_folder.delete(0, tk.END)
+                self.output_folder.insert(0, self.exr_conversion_params['output_dir'])
+                
+                self.output_filename.delete(0, tk.END)
+                self.output_filename.insert(0, self.exr_conversion_params['output_file'])
+                
+                # Call update_duration to recalculate scale_factor properly
+                self.update_duration()
+                
+                # Now that all UI is set up correctly, let the existing code handle the FFmpeg stage
+                self.run_ffmpeg()
+            else:
+                # If parameters are missing, show error and stop
+                self.queue.put(('error', "Required parameters for FFmpeg conversion are missing"))
+                return
+        else:
+            self.queue.put(('error', "Failed to detect PNG sequence in temp directory"))
+
+    def get_ui_parameters(self):
+        # Read all critical values from UI widgets
+        ui_params = {
+            "codec": self.codec_var.get(),
+            "frame_rate": self.frame_rate.get(),
+            "desired_duration": self.desired_duration.get(),
+            "output_filename": self.output_filename.get(),
+            "output_folder": self.output_folder.get(),
+            "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else "",
+            "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else "",
+            "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else "",
+            "prores_qscale": self.prores_qscale.get() if hasattr(self, 'prores_qscale') else "",
+        }
+        print("UI Parameters gathered:", ui_params)
+        return ui_params
+
+    def signal_handler(self, signum, frame):
+        """Handle termination signals gracefully"""
+        print(f"\nDEBUG: Received signal {signum}, initiating cleanup...")
+        self.cleanup()
+        sys.exit(0)
+
+    def cleanup(self):
+        """Centralized cleanup method"""
+        if self.is_shutting_down:
+            print("DEBUG: Cleanup already in progress, skipping...")
+            return
+            
+        self.is_shutting_down = True
+        print("\nDEBUG: Starting cleanup process...")
+        
+        # First stop all reader threads
+        for thread in self.active_threads:
+            try:
+                if thread and thread.is_alive():
+                    print(f"DEBUG: Waiting for thread to finish")
+                    thread.join(timeout=2)
+            except Exception as e:
+                print(f"DEBUG: Error stopping thread: {e}")
+
+        # Then terminate all processes
+        for process in self.active_processes:
+            try:
+                if process and process.poll() is None:  # Process is still running
+                    pid = process.pid
+                    print(f"DEBUG: Terminating process {pid}")
+                    
+                    # First try SIGTERM
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)  # Wait longer for graceful shutdown
+                        print(f"DEBUG: Process {pid} terminated gracefully")
+                    except subprocess.TimeoutExpired:
+                        print(f"DEBUG: Process {pid} didn't terminate, sending SIGKILL")
+                        # If still running, force kill
+                        process.kill()
+                        try:
+                            process.wait(timeout=2)
+                            print(f"DEBUG: Process {pid} killed")
+                        except subprocess.TimeoutExpired:
+                            print(f"DEBUG: Failed to kill process {pid}")
+            except Exception as e:
+                print(f"DEBUG: Error terminating process: {e}")
+                try:
+                    # Force kill as last resort
+                    if process and process.pid:
+                        os.kill(process.pid, signal.SIGKILL)
+                        print(f"DEBUG: Sent SIGKILL to process {process.pid}")
+                except Exception as kill_error:
+                    print(f"DEBUG: Final kill attempt failed: {kill_error}")
+
+        # Clean up temp directories
+        try:
+            # First clean up process-specific temp directory
+            if hasattr(self, 'temp_dir') and self.temp_dir and os.path.exists(self.temp_dir):
+                print(f"DEBUG: Removing process temp directory: {self.temp_dir}")
+                for _ in range(3):  # Try a few times with delays
+                    try:
+                        shutil.rmtree(self.temp_dir)
+                        print(f"DEBUG: Successfully removed {self.temp_dir}")
+                        break
+                    except Exception as e:
+                        print(f"DEBUG: Failed to remove directory, retrying... Error: {e}")
+                        time.sleep(1)  # Wait a bit before retrying
+            
+            # Then clean up base temp directory if it's empty
+            if hasattr(self, 'base_temp_dir') and self.base_temp_dir and os.path.exists(self.base_temp_dir):
+                try:
+                    # Only remove if empty
+                    if not os.listdir(self.base_temp_dir):
+                        os.rmdir(self.base_temp_dir)
+                        print(f"DEBUG: Removed empty base temp directory: {self.base_temp_dir}")
+                except Exception as e:
+                    print(f"DEBUG: Error cleaning base temp directory: {e}")
+                    
+        except Exception as e:
+            print(f"DEBUG: Error during temp directory cleanup: {e}")
+
+        print("DEBUG: Cleanup completed")
+
+    def on_closing(self):
+        """Handle window close button"""
+        print("\nDEBUG: Application closing, initiating cleanup...")
+        self.cleanup()
+        self.root.destroy()
+
+    def read_process_output(self, process, total_frames):
+        import select, time
+        stdout_buffer = ""
+        stderr_buffer = ""
+        current_frame = 0
+        stdout_closed = False
+        stderr_closed = False
+
+        while not (stdout_closed and stderr_closed):
+            streams = []
+            if not stdout_closed:
+                streams.append(process.stdout)
+            if not stderr_closed:
+                streams.append(process.stderr)
+            if streams:
+                rlist, _, _ = select.select(streams, [], [], 0.1)
+            else:
+                break
+            for stream in rlist:
+                try:
+                    ch = stream.read(1)
+                except Exception:
+                    ch = ""
+                if ch == '':
+                    if stream == process.stdout:
+                        stdout_closed = True
+                    elif stream == process.stderr:
+                        stderr_closed = True
+                    continue
+                if stream == process.stdout:
+                    stdout_buffer += ch
+                    if ch in ['\n', '\r']:
+                        self.queue.put(('output', stdout_buffer))
+                        print("DEBUG: OIIO STDOUT:", stdout_buffer.strip())
+                        stdout_buffer = ""
+                elif stream == process.stderr:
+                    stderr_buffer += ch
+                    if ch in ['\n', '\r']:
+                        line = stderr_buffer.strip()
+                        self.queue.put(('output', stderr_buffer))
+                        print("DEBUG: OIIO STDERR:", line)
+                        if "Writing" in line:
+                            current_frame += 1
+                            progress = (current_frame / total_frames) * 100
+                            status = f"Converting EXR frames: {current_frame}/{total_frames} ({progress:.1f}%)"
+                            self.queue.put(('progress', (progress, status)))
+                        stderr_buffer = ""
+            time.sleep(0.01)
+        
+        # Flush any remaining data from the streams.
+        remaining_stdout = process.stdout.read()
+        if remaining_stdout:
+            self.queue.put(('output', remaining_stdout))
+        remaining_stderr = process.stderr.read()
+        if remaining_stderr:
+            self.queue.put(('output', remaining_stderr))
 
 if __name__ == "__main__":
     check_and_install_dependencies()
