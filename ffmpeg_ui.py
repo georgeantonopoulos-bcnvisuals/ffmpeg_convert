@@ -978,13 +978,16 @@ class FFmpegUI:
             stdout_thread.join(timeout=1)
             stderr_thread.join(timeout=1)
 
-            # Clean up temp directory if it exists
-            if hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
+            # Clean up temp directory if it exists and ffmpeg completed successfully
+            if process.returncode == 0 and hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
                 try:
+                    print(f"DEBUG: Cleaning up temp directory after successful conversion: {self.temp_dir}")
+                    self.queue.put(('output', f"Cleaning up temporary files...\n"))
                     shutil.rmtree(self.temp_dir)
                     print(f"Cleaned up temp directory: {self.temp_dir}")
                 except Exception as e:
                     print(f"Warning: Could not clean up temp directory: {e}")
+                    self.queue.put(('output', f"Warning: Could not clean up temp files: {e}\n"))
 
             if process.returncode != 0:
                 error_message = f"FFmpeg process returned {process.returncode}"
@@ -1059,12 +1062,56 @@ class FFmpegUI:
         print("\nDEBUG: convert_exr_files starting")
         self.queue.put(('output', "\nDEBUG: Starting EXR conversion (thread)...\n"))
         
-        # Use local tmp_files directory instead of /tmp
-        self.temp_dir = os.path.join(self.base_temp_dir, f"convert_{os.getpid()}")
-        if not os.path.exists(self.temp_dir):
-            print(f"DEBUG: Creating temp dir: {self.temp_dir}")
-            self.queue.put(('output', f"DEBUG: Creating temp dir: {self.temp_dir}\n"))
-            os.makedirs(self.temp_dir)
+        # First try to create temp directory as a subdirectory of the input folder
+        temp_dir_name = f"ffmpeg_tmp_{os.getpid()}"
+        
+        # Try creating temp dir in input folder first
+        input_temp_dir = os.path.join(img_folder, temp_dir_name)
+        try:
+            os.makedirs(input_temp_dir, exist_ok=True)
+            # Test write permissions
+            test_file = os.path.join(input_temp_dir, ".permission_test")
+            with open(test_file, 'w') as f:
+                f.write("test")
+            os.remove(test_file)
+            self.temp_dir = input_temp_dir
+            print(f"DEBUG: Created temp dir in input folder: {self.temp_dir}")
+            self.queue.put(('output', f"DEBUG: Created temp dir in input folder: {self.temp_dir}\n"))
+        except (IOError, PermissionError) as e:
+            print(f"DEBUG: Cannot create temp dir in input folder: {e}")
+            self.queue.put(('output', f"DEBUG: Cannot create temp dir in input folder: {e}\n"))
+            
+            # Try /mnt/temporal/ffmpeg_tool_cache/ as second option
+            try:
+                mnt_temp_dir = "/mnt/temporal/ffmpeg_tool_cache"
+                os.makedirs(mnt_temp_dir, exist_ok=True)
+                self.temp_dir = os.path.join(mnt_temp_dir, temp_dir_name)
+                os.makedirs(self.temp_dir, exist_ok=True)
+                # Test write permissions
+                test_file = os.path.join(self.temp_dir, ".permission_test")
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                print(f"DEBUG: Created temp dir in /mnt/temporal: {self.temp_dir}")
+                self.queue.put(('output', f"DEBUG: Created temp dir in /mnt/temporal: {self.temp_dir}\n"))
+            except (IOError, PermissionError, FileNotFoundError) as e:
+                print(f"DEBUG: Cannot create temp dir in /mnt/temporal: {e}")
+                self.queue.put(('output', f"DEBUG: Cannot create temp dir in /mnt/temporal: {e}\n"))
+                
+                # Finally, use the original method with base_temp_dir
+                self.temp_dir = os.path.join(self.base_temp_dir, f"convert_{os.getpid()}")
+                try:
+                    os.makedirs(self.temp_dir, exist_ok=True)
+                    print(f"DEBUG: Created temp dir in base location: {self.temp_dir}")
+                    self.queue.put(('output', f"DEBUG: Created temp dir in base location: {self.temp_dir}\n"))
+                except Exception as e:
+                    # Last resort - try /tmp
+                    print(f"DEBUG: Cannot create temp dir in base location: {e}")
+                    self.queue.put(('output', f"DEBUG: Cannot create temp dir in base location: {e}\n"))
+                    self.temp_dir = os.path.join("/tmp", f"ffmpeg_tmp_{os.getpid()}")
+                    os.makedirs(self.temp_dir, exist_ok=True)
+                    print(f"DEBUG: Created temp dir in /tmp: {self.temp_dir}")
+                    self.queue.put(('output', f"DEBUG: Created temp dir in /tmp: {self.temp_dir}\n"))
         
         total_frames = end_frame - start_frame + 1
         print("DEBUG: total_frames =", total_frames)
@@ -1215,6 +1262,9 @@ class FFmpegUI:
                 print(f"DEBUG: {error_msg}")
                 self.queue.put(('error', error_msg))
                 return
+            
+            # If we get here, conversion was 100% successful
+            self.queue.put(('output', "EXR conversion completed successfully\n"))
             
             # Store frame range for FFmpeg conversion
             self.temp_frame_range = (start_frame, end_frame)
