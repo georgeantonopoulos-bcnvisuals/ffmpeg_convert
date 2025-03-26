@@ -699,6 +699,28 @@ class FFmpegUI:
                 messagebox.showerror("Error", "Frame range not detected. Please select the image sequence folder again.")
                 return
             start_frame, end_frame = self.frame_range
+            
+            # Store all parameters for second stage processing
+            self.exr_conversion_params = {
+                'output_framerate': float(self.frame_rate.get()),
+                'source_framerate': float(self.source_frame_rate.get()),
+                'desired_duration': float(self.desired_duration.get()),
+                'codec': codec,
+                'output_dir': output_dir,
+                'output_file': output_file
+            }
+            
+            # Store codec-specific parameters
+            if codec in ["h264", "h265"]:
+                self.exr_conversion_params.update({
+                    'bitrate': self.mp4_bitrate.get(),
+                    'crf': self.mp4_crf.get()
+                })
+            elif codec.startswith("prores"):
+                self.exr_conversion_params.update({
+                    'profile': self.prores_profile.get(),
+                    'qscale': self.prores_qscale.get()
+                })
 
             # Launch the conversion in a separate thread so that the UI isn't blocked.
             conversion_thread = threading.Thread(
@@ -1073,97 +1095,127 @@ class FFmpegUI:
         print(f"DEBUG: Need to convert {len(missing_frames)} frames")
         self.queue.put(('output', f"Converting {len(missing_frames)} frames\n"))
         
-        # Get selected color space and format it for command line (replace spaces with underscores)
-        input_colorspace = self.color_space_var.get().replace(" ", "_")
-        output_colorspace = "Output_-_sRGB"  # Fixed output colorspace with underscores
+        # Get selected color space names (preserve spaces, no underscores)
+        input_colorspace = self.color_space_var.get()
+        output_colorspace = "Output - sRGB"
         
-        # Build the oiiotool command line with ACES color management
-        # Use #### for frame numbers in oiiotool (it expects 4 hash marks for frame numbers)
-        input_pattern = os.path.join(img_folder, f"{before}####.exr")
-        output_pattern = os.path.join(self.temp_dir, f"{before}####.png")
+        # Verify that at least the first input file exists
+        first_frame = missing_frames[0] if missing_frames else start_frame
+        input_file_pattern = os.path.join(img_folder, pattern)
+        test_file = input_file_pattern.replace("%04d", f"{first_frame:04d}")
+        if not os.path.exists(test_file):
+            error_msg = f"Input file not found: {test_file}"
+            print(f"DEBUG: {error_msg}")
+            self.queue.put(('error', error_msg))
+            return
         
-        conversion_cmd = [
-            "oiiotool",
-            "-v",
-            "--colorconfig", "/mnt/studio/config/ocio/aces_1.2/config.ocio",
-            "--threads", str(os.cpu_count()),
-            "--frames", f"{start_frame}-{end_frame}",
-            input_pattern,
-            "--ch", "R,G,B",
-            "--iscolorspace", input_colorspace,
-            "--colorconvert", input_colorspace, output_colorspace,
-            "-d", "uint8",
-            "--compression", "none",
-            "--no-clobber",
-            "-o", output_pattern
-        ]
+        # Build command for individual files using the pattern from UI
+        cmds = []
+        for frame in missing_frames:
+            # Use the pattern directly from UI with proper frame substitution
+            input_file = input_file_pattern.replace("%04d", f"{frame:04d}")
+            output_file = os.path.join(self.temp_dir, f"{before}{frame:04d}.png")
+            
+            # Skip file if it already exists
+            if os.path.exists(output_file):
+                continue
+                
+            # Check if input file exists
+            if not os.path.exists(input_file):
+                error_msg = f"Input file not found: {input_file}"
+                print(f"DEBUG: {error_msg}")
+                self.queue.put(('error', error_msg))
+                return
+                
+            cmd = [
+                "oiiotool",
+                "-v",
+                "--colorconfig", "/mnt/studio/config/ocio/aces_1.2/config.ocio",
+                "--threads", "1",  # Use single thread per file
+                input_file,
+                "--ch", "R,G,B",
+                "--colorconvert", input_colorspace, output_colorspace,  # Preserve spaces, don't use underscores
+                "-d", "uint8",
+                "--compression", "none",
+                "--no-clobber",
+                "-o", output_file
+            ]
+            cmds.append((cmd, frame))
+            
+        if not cmds:
+            print("DEBUG: No valid frames to convert")
+            self.queue.put(('error', "No valid frames to convert. Check that input files exist."))
+            return
+            
+        # Print sample command for debugging
+        print("\nDEBUG: Sample conversion command:", " ".join(cmds[0][0]))
+        self.queue.put(('output', f"\nDEBUG: Will convert {len(cmds)} frames individually\n"))
         
-        cmd_str = " ".join(conversion_cmd)
-        print("\nDEBUG: conversion command:", cmd_str)
-        self.queue.put(('output', f"\nDEBUG: Conversion command: {cmd_str}\n"))
+        # Process files with a thread pool to speed things up but not overload the system
+        max_workers = min(os.cpu_count(), 8)  # Limit to 8 parallel processes max
+        total_files = len(cmds)
+        completed_files = 0
         
         try:
-            process = subprocess.Popen(
-                conversion_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-                bufsize=1
-            )
-            self.active_processes.append(process)
-            print(f"\nDEBUG: Process started with PID: {process.pid}")
-            self.queue.put(('output', f"\nDEBUG: Process started with PID: {process.pid}\n"))
-
-            current_frame = 0
-
-            def read_stderr():
-                nonlocal current_frame
+            # Define a function to process one file
+            def process_file(cmd_info):
+                cmd, frame_num = cmd_info
                 try:
-                    for line in iter(process.stderr.readline, ''):
-                        self.queue.put(('output', line))
-                        print(f"STDERR: {line.strip()}")
-                        if "Writing" in line:
-                            current_frame += 1
-                            progress = (current_frame / total_frames) * 100
-                            status = f"Converting EXR frames: {current_frame}/{total_frames} ({progress:.1f}%)"
-                            self.queue.put(('progress', (progress, status)))
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        universal_newlines=True
+                    )
+                    stdout, stderr = process.communicate()
+                    
+                    # Return success/failure info
+                    return (frame_num, process.returncode, stderr if process.returncode != 0 else None)
                 except Exception as e:
-                    print(f"Stderr reader error: {str(e)}")
-                    self.queue.put(('output', f"\nError Reading Stderr: {str(e)}\n"))
-
-            def read_stdout():
-                try:
-                    for line in iter(process.stdout.readline, ''):
-                        print(f"STDOUT: {line.strip()}")
-                        self.queue.put(('output', line))
-                except Exception as e:
-                    print(f"Stdout reader error: {str(e)}")
-                    self.queue.put(('output', f"\nOutput Reader Error: {str(e)}\n"))
-
-            stdout_thread = threading.Thread(target=read_stdout)
-            stderr_thread = threading.Thread(target=read_stderr)
-            stdout_thread.daemon = True
-            stderr_thread.daemon = True
+                    return (frame_num, -1, str(e))
             
-            # Store threads for cleanup
-            self.active_threads.extend([stdout_thread, stderr_thread])
+            # Create and start worker threads
+            threads = []
+            active_workers = 0
+            cmd_queue = list(cmds)
+            results = []
             
-            stdout_thread.start()
-            stderr_thread.start()
-
-            # Wait for process to complete
-            return_code = process.wait()
+            while cmd_queue or threads:
+                # Start new workers if we have capacity and commands
+                while active_workers < max_workers and cmd_queue:
+                    cmd_info = cmd_queue.pop(0)
+                    thread = threading.Thread(target=lambda c=cmd_info: results.append(process_file(c)))
+                    thread.daemon = True
+                    thread.start()
+                    threads.append(thread)
+                    active_workers += 1
+                
+                # Check for completed threads
+                still_active = []
+                for thread in threads:
+                    if thread.is_alive():
+                        still_active.append(thread)
+                    else:
+                        active_workers -= 1
+                        completed_files += 1
+                        # Update progress
+                        progress = (completed_files / total_files) * 100
+                        status = f"Converting EXR frames: {completed_files}/{total_files} ({progress:.1f}%)"
+                        self.queue.put(('progress', (progress, status)))
+                
+                threads = still_active
+                time.sleep(0.1)  # Don't hammer the CPU checking thread status
             
-            # Wait for reader threads to finish
-            stdout_thread.join(timeout=1)
-            stderr_thread.join(timeout=1)
-
-            if return_code != 0:
-                error_message = f"oiiotool process failed with return code {return_code}"
-                print(f"DEBUG: {error_message}")
-                self.queue.put(('error', error_message))
+            # Check results
+            failures = [r for r in results if r[1] != 0]
+            if failures:
+                error_frames = ", ".join(str(f[0]) for f in failures[:5])
+                more_text = f" and {len(failures) - 5} more" if len(failures) > 5 else ""
+                error_msg = f"Failed to convert {len(failures)} frames (frames {error_frames}{more_text})"
+                print(f"DEBUG: {error_msg}")
+                self.queue.put(('error', error_msg))
                 return
-
+            
             # Store frame range for FFmpeg conversion
             self.temp_frame_range = (start_frame, end_frame)
             
@@ -1188,6 +1240,19 @@ class FFmpegUI:
         
         # Assemble the PNG sequence from the temporary directory.
         png_files = sorted([f for f in os.listdir(self.temp_dir) if f.endswith('.png')])
+        
+        if not png_files:
+            self.queue.put(('error', "No PNG files found in temp directory"))
+            return
+            
+        # Verify all expected frames exist
+        expected_count = end_frame - start_frame + 1
+        if len(png_files) != expected_count:
+            error_msg = f"Expected {expected_count} PNG files but found {len(png_files)}"
+            self.queue.put(('error', error_msg))  # Use error instead of warning to stop process
+            return
+        
+        # Use clique to assemble the sequence properly
         collections, _ = clique.assemble(png_files)
         
         if collections:
@@ -1201,13 +1266,48 @@ class FFmpegUI:
             # Set the frame range and total frames for FFmpeg.
             self.frame_range = self.temp_frame_range
             self.total_frames = end_frame - start_frame + 1
-
-            # Use helper to collect all UI parameters.
-            ui_params = self.get_ui_parameters()
-            print("Parameters for FFmpeg conversion:", ui_params)
             
-            # Optionally store these parameters (or pass to run_ffmpeg if needed).
-            self.run_ffmpeg()
+            # Restore parameters from storage if available
+            if hasattr(self, 'exr_conversion_params'):
+                # Update UI widgets to match stored parameters
+                self.frame_rate.delete(0, tk.END)
+                self.frame_rate.insert(0, str(self.exr_conversion_params['output_framerate']))
+                
+                self.source_frame_rate.delete(0, tk.END)
+                self.source_frame_rate.insert(0, str(self.exr_conversion_params['source_framerate']))
+                
+                self.desired_duration.delete(0, tk.END)
+                self.desired_duration.insert(0, str(self.exr_conversion_params['desired_duration']))
+                
+                # Set the codec dropdown
+                self.codec_var.set(self.exr_conversion_params['codec'])
+                self.update_codec()  # Update the UI for the selected codec
+                
+                # Set codec-specific parameters
+                codec = self.exr_conversion_params['codec']
+                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate') and hasattr(self, 'mp4_crf'):
+                    self.mp4_bitrate.set(self.exr_conversion_params['bitrate'])
+                    self.mp4_crf.set(self.exr_conversion_params['crf'])
+                elif codec.startswith("prores") and hasattr(self, 'prores_profile') and hasattr(self, 'prores_qscale'):
+                    self.prores_profile.set(self.exr_conversion_params['profile'])
+                    self.prores_qscale.set(self.exr_conversion_params['qscale'])
+                
+                # Set output file and folder
+                self.output_folder.delete(0, tk.END)
+                self.output_folder.insert(0, self.exr_conversion_params['output_dir'])
+                
+                self.output_filename.delete(0, tk.END)
+                self.output_filename.insert(0, self.exr_conversion_params['output_file'])
+                
+                # Call update_duration to recalculate scale_factor properly
+                self.update_duration()
+                
+                # Now that all UI is set up correctly, let the existing code handle the FFmpeg stage
+                self.run_ffmpeg()
+            else:
+                # If parameters are missing, show error and stop
+                self.queue.put(('error', "Required parameters for FFmpeg conversion are missing"))
+                return
         else:
             self.queue.put(('error', "Failed to detect PNG sequence in temp directory"))
 
