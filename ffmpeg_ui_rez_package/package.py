@@ -7,7 +7,8 @@ authors = ["BCN Visuals"]
 
 requires = [
     "tkinter",
-    "openimageio"  # From the launch script, we see this dependency
+    "openimageio",
+    "clique"  # From the launch script, we see this dependency
 ]
 
 def commands():
