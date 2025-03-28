@@ -256,9 +256,18 @@ class FFmpegUI:
             self.output_folder.insert(0, self.settings["last_output_folder"])
         ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=8, column=2, padx=10, pady=5)
 
+        # Add temp directory location selection in a frame
+        self.temp_dir_frame = ttk.Frame(root)
+        self.temp_dir_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        ttk.Label(self.temp_dir_frame, text="Temp Directory Location:", font=self.title_font).grid(row=0, column=0, sticky="w")
+        self.temp_dir_var = tk.StringVar(value="source folder")
+        self.temp_dir_dropdown = ttk.Combobox(self.temp_dir_frame, textvariable=self.temp_dir_var, values=["source folder", "temporal drive", "tmp dir"], state="readonly", width=40)
+        self.temp_dir_dropdown.grid(row=0, column=1, columnspan=2, sticky="ew")
+        self.temp_dir_frame.grid_remove()  # Initially hidden
+
         # Add ACES color space selection
         self.aces_frame = ttk.Frame(root)
-        self.aces_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.aces_frame.grid(row=10, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.aces_frame.grid_remove()  # Initially hidden
 
         ttk.Label(self.aces_frame, text="EXR Color Space:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=5, pady=5)
@@ -281,14 +290,14 @@ class FFmpegUI:
         self.color_space_dropdown['values'] = self.color_spaces
 
         # Move the Run FFmpeg button to after the ACES frame
-        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=10, column=1, pady=20)
+        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=11, column=1, pady=20)
 
         # Codec-specific options frames
         self.h264_h265_frame = ttk.Frame(root)
-        self.h264_h265_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.h264_h265_frame.grid(row=12, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
 
         self.prores_frame = ttk.Frame(root)
-        self.prores_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.prores_frame.grid(row=12, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.prores_frame.grid_remove()  # Initially hidden
 
         # Initialize codec-specific variables
@@ -321,21 +330,21 @@ class FFmpegUI:
         # Progress Bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(root, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.grid(row=12, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
+        self.progress_bar.grid(row=13, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
 
         # Status Label
         self.status_label = ttk.Label(root, text="", font=self.custom_font)
-        self.status_label.grid(row=13, column=0, columnspan=3, padx=10, pady=(5,20))
+        self.status_label.grid(row=14, column=0, columnspan=3, padx=10, pady=(5,20))
 
         # FFmpeg Output Text Widget
         self.output_text = tk.Text(root, height=10, width=80, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff')
-        self.output_text.grid(row=14, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
+        self.output_text.grid(row=15, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
         self.output_scrollbar = ttk.Scrollbar(root, orient='vertical', command=self.output_text.yview)
-        self.output_scrollbar.grid(row=14, column=3, sticky='ns')
+        self.output_scrollbar.grid(row=15, column=3, sticky='ns')
         self.output_text['yscrollcommand'] = self.output_scrollbar.set
 
         # Configure the new row to expand
-        root.grid_rowconfigure(14, weight=1)
+        root.grid_rowconfigure(15, weight=1)
 
         # Initialize codec-specific UI based on default selection
         self.update_codec()
@@ -450,8 +459,11 @@ class FFmpegUI:
                                 # Show/hide ACES frame based on file type
                                 if pattern.lower().endswith('.exr'):
                                     self.aces_frame.grid()
+                                    self.temp_dir_frame.grid()  # Show temp dir selection for EXR files
                                 else:
                                     self.aces_frame.grid_remove()
+                                    self.temp_dir_frame.grid_remove()  # Hide temp dir selection for non-EXR files
+                                    self.temp_dir_var.set("source folder")  # Reset to default when hidden
                                 
                                 # Update output filename
                                 output_name = collection.head.rstrip('_.')
@@ -489,8 +501,11 @@ class FFmpegUI:
                         # Show/hide ACES frame based on file type
                         if pattern.lower().endswith('.exr'):
                             self.aces_frame.grid()
+                            self.temp_dir_frame.grid()  # Show temp dir selection for EXR files
                         else:
                             self.aces_frame.grid_remove()
+                            self.temp_dir_frame.grid_remove()  # Hide temp dir selection for non-EXR files
+                            self.temp_dir_var.set("source folder")  # Reset to default when hidden
                         
                         self.frame_range = (min(collection.indexes), max(collection.indexes))
                         self.total_frames = len(collection.indexes)
@@ -1065,23 +1080,30 @@ class FFmpegUI:
         # First try to create temp directory as a subdirectory of the input folder
         temp_dir_name = f"ffmpeg_tmp_{os.getpid()}"
         
-        # Try creating temp dir in input folder first
-        input_temp_dir = os.path.join(img_folder, temp_dir_name)
-        try:
-            os.makedirs(input_temp_dir, exist_ok=True)
-            # Test write permissions
-            test_file = os.path.join(input_temp_dir, ".permission_test")
-            with open(test_file, 'w') as f:
-                f.write("test")
-            os.remove(test_file)
-            self.temp_dir = input_temp_dir
-            print(f"DEBUG: Created temp dir in input folder: {self.temp_dir}")
-            self.queue.put(('output', f"DEBUG: Created temp dir in input folder: {self.temp_dir}\n"))
-        except (IOError, PermissionError) as e:
-            print(f"DEBUG: Cannot create temp dir in input folder: {e}")
-            self.queue.put(('output', f"DEBUG: Cannot create temp dir in input folder: {e}\n"))
-            
-            # Try /mnt/temporal/ffmpeg_tool_cache/ as second option
+        # Get selected temp directory location
+        temp_location = self.temp_dir_var.get()
+        
+        if temp_location == "source folder":
+            # Try creating temp dir in input folder first
+            input_temp_dir = os.path.join(img_folder, temp_dir_name)
+            try:
+                os.makedirs(input_temp_dir, exist_ok=True)
+                # Test write permissions
+                test_file = os.path.join(input_temp_dir, ".permission_test")
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+                self.temp_dir = input_temp_dir
+                print(f"DEBUG: Created temp dir in input folder: {self.temp_dir}")
+                self.queue.put(('output', f"DEBUG: Created temp dir in input folder: {self.temp_dir}\n"))
+            except (IOError, PermissionError) as e:
+                print(f"DEBUG: Cannot create temp dir in input folder: {e}")
+                self.queue.put(('output', f"DEBUG: Cannot create temp dir in input folder: {e}\n"))
+                # Fall through to tmp dir as last resort
+                temp_location = "tmp dir"
+        
+        if temp_location == "temporal drive":
+            # Try /mnt/temporal/ffmpeg_tool_cache/
             try:
                 mnt_temp_dir = "/mnt/temporal/ffmpeg_tool_cache"
                 os.makedirs(mnt_temp_dir, exist_ok=True)
@@ -1097,21 +1119,24 @@ class FFmpegUI:
             except (IOError, PermissionError, FileNotFoundError) as e:
                 print(f"DEBUG: Cannot create temp dir in /mnt/temporal: {e}")
                 self.queue.put(('output', f"DEBUG: Cannot create temp dir in /mnt/temporal: {e}\n"))
-                
-                # Finally, use the original method with base_temp_dir
-                self.temp_dir = os.path.join(self.base_temp_dir, f"convert_{os.getpid()}")
-                try:
-                    os.makedirs(self.temp_dir, exist_ok=True)
-                    print(f"DEBUG: Created temp dir in base location: {self.temp_dir}")
-                    self.queue.put(('output', f"DEBUG: Created temp dir in base location: {self.temp_dir}\n"))
-                except Exception as e:
-                    # Last resort - try /tmp
-                    print(f"DEBUG: Cannot create temp dir in base location: {e}")
-                    self.queue.put(('output', f"DEBUG: Cannot create temp dir in base location: {e}\n"))
-                    self.temp_dir = os.path.join("/tmp", f"ffmpeg_tmp_{os.getpid()}")
-                    os.makedirs(self.temp_dir, exist_ok=True)
-                    print(f"DEBUG: Created temp dir in /tmp: {self.temp_dir}")
-                    self.queue.put(('output', f"DEBUG: Created temp dir in /tmp: {self.temp_dir}\n"))
+                # Fall through to tmp dir as last resort
+                temp_location = "tmp dir"
+        
+        if temp_location == "tmp dir":
+            # Try the base temp dir first
+            self.temp_dir = os.path.join("/tmp", f"convert_{os.getpid()}")
+            try:
+                os.makedirs(self.temp_dir, exist_ok=True)
+                print(f"DEBUG: Created temp dir in base location: {self.temp_dir}")
+                self.queue.put(('output', f"DEBUG: Created temp dir in base location: {self.temp_dir}\n"))
+            except Exception as e:
+                # Last resort - try /tmp
+                print(f"DEBUG: Cannot create temp dir in base location: {e}")
+                self.queue.put(('output', f"DEBUG: Cannot create temp dir in base location: {e}\n"))
+                self.temp_dir = os.path.join("/tmp", f"ffmpeg_tmp_{os.getpid()}")
+                os.makedirs(self.temp_dir, exist_ok=True)
+                print(f"DEBUG: Created temp dir in /tmp: {self.temp_dir}")
+                self.queue.put(('output', f"DEBUG: Created temp dir in /tmp: {self.temp_dir}\n"))
         
         total_frames = end_frame - start_frame + 1
         print("DEBUG: total_frames =", total_frames)
@@ -1208,6 +1233,7 @@ class FFmpegUI:
             def process_file(cmd_info):
                 cmd, frame_num = cmd_info
                 try:
+                    print(f"DEBUG: Starting conversion for frame {frame_num}")
                     process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
@@ -1216,9 +1242,26 @@ class FFmpegUI:
                     )
                     stdout, stderr = process.communicate()
                     
-                    # Return success/failure info
-                    return (frame_num, process.returncode, stderr if process.returncode != 0 else None)
+                    # Log detailed output for debugging
+                    if stdout:
+                        print(f"DEBUG: Frame {frame_num} stdout: {stdout[:100]}")
+                    
+                    if process.returncode != 0:
+                        print(f"DEBUG: Frame {frame_num} FAILED with return code {process.returncode}")
+                        print(f"DEBUG: Frame {frame_num} error output: {stderr}")
+                        
+                        # Check if output directory still exists and is writable
+                        output_file = os.path.join(self.temp_dir, f"{before}{frame_num:04d}.png")
+                        output_dir = os.path.dirname(output_file)
+                        print(f"DEBUG: Output path: {output_file}")
+                        print(f"DEBUG: Output dir exists: {os.path.exists(output_dir)}")
+                        if os.path.exists(output_dir):
+                            print(f"DEBUG: Output dir writable: {os.access(output_dir, os.W_OK)}")
+                        
+                        return (frame_num, process.returncode, stderr)
+                    return (frame_num, 0, None)
                 except Exception as e:
+                    print(f"DEBUG: Exception for frame {frame_num}: {str(e)}")
                     return (frame_num, -1, str(e))
             
             # Create and start worker threads
@@ -1256,9 +1299,52 @@ class FFmpegUI:
             # Check results
             failures = [r for r in results if r[1] != 0]
             if failures:
+                print("\nDEBUG: DETAILED FAILURE INFORMATION:")
+                for i, failure in enumerate(failures[:10]):  # Show first 10 failures in detail
+                    frame_num, return_code, error_msg = failure
+                    print(f"DEBUG: Frame {frame_num} failed with code {return_code}")
+                    if error_msg:
+                        print(f"DEBUG: Error message: {error_msg}")
+                    # Print the command that was used for this frame
+                    input_file = input_file_pattern.replace("%04d", f"{frame_num:04d}")
+                    output_file = os.path.join(self.temp_dir, f"{before}{frame_num:04d}.png")
+                    print(f"DEBUG: Failed command: oiiotool --colorconfig {ocio_config} {input_file} -o {output_file}")
+                    # Check if input and output files exist
+                    print(f"DEBUG: Input file exists: {os.path.exists(input_file)}")
+                    print(f"DEBUG: Output directory exists: {os.path.exists(os.path.dirname(output_file))}")
+                    print(f"DEBUG: Output directory writable: {os.access(os.path.dirname(output_file), os.W_OK)}")
+                    print(f"DEBUG: ---")
+                
+                # Also check temp directory status
+                print(f"DEBUG: Temp directory: {self.temp_dir}")
+                print(f"DEBUG: Temp directory exists: {os.path.exists(self.temp_dir)}")
+                if os.path.exists(self.temp_dir):
+                    print(f"DEBUG: Temp directory writable: {os.access(self.temp_dir, os.W_OK)}")
+                    print(f"DEBUG: Temp directory contents: {os.listdir(self.temp_dir)}")
+                    # Check disk space
+                    try:
+                        stat = os.statvfs(self.temp_dir)
+                        free_space_mb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024)
+                        print(f"DEBUG: Free space in temp directory: {free_space_mb:.2f} MB")
+                    except Exception as e:
+                        print(f"DEBUG: Error checking disk space: {e}")
+                
                 error_frames = ", ".join(str(f[0]) for f in failures[:5])
                 more_text = f" and {len(failures) - 5} more" if len(failures) > 5 else ""
-                error_msg = f"Failed to convert {len(failures)} frames (frames {error_frames}{more_text})"
+                
+                # Get first error message for display
+                first_error = failures[0][2] if failures and len(failures) > 0 and failures[0][2] else "Unknown error"
+                first_error_preview = first_error[:150] + "..." if len(first_error) > 150 else first_error
+                
+                error_msg = (
+                    f"Failed to convert {len(failures)} frames (frames {error_frames}{more_text})\n\n"
+                    f"Sample error: {first_error_preview}\n\n"
+                    f"Possible issues:\n"
+                    f"1. Check if OCIO configuration exists at {ocio_config}\n"
+                    f"2. Verify permissions on temp directory: {self.temp_dir}\n"
+                    f"3. Check disk space in temp location\n"
+                    f"4. Verify input EXR files exist and are readable"
+                )
                 print(f"DEBUG: {error_msg}")
                 self.queue.put(('error', error_msg))
                 return
