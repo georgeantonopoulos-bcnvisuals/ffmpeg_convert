@@ -1124,7 +1124,7 @@ class FFmpegUI:
         
         if temp_location == "tmp dir":
             # Try the base temp dir first
-            self.temp_dir = os.path.join("/tmp", f"convert_{os.getpid()}")
+            self.temp_dir = os.path.join(self.base_temp_dir, f"convert_{os.getpid()}")
             try:
                 os.makedirs(self.temp_dir, exist_ok=True)
                 print(f"DEBUG: Created temp dir in base location: {self.temp_dir}")
@@ -1233,7 +1233,6 @@ class FFmpegUI:
             def process_file(cmd_info):
                 cmd, frame_num = cmd_info
                 try:
-                    print(f"DEBUG: Starting conversion for frame {frame_num}")
                     process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
@@ -1242,26 +1241,9 @@ class FFmpegUI:
                     )
                     stdout, stderr = process.communicate()
                     
-                    # Log detailed output for debugging
-                    if stdout:
-                        print(f"DEBUG: Frame {frame_num} stdout: {stdout[:100]}")
-                    
-                    if process.returncode != 0:
-                        print(f"DEBUG: Frame {frame_num} FAILED with return code {process.returncode}")
-                        print(f"DEBUG: Frame {frame_num} error output: {stderr}")
-                        
-                        # Check if output directory still exists and is writable
-                        output_file = os.path.join(self.temp_dir, f"{before}{frame_num:04d}.png")
-                        output_dir = os.path.dirname(output_file)
-                        print(f"DEBUG: Output path: {output_file}")
-                        print(f"DEBUG: Output dir exists: {os.path.exists(output_dir)}")
-                        if os.path.exists(output_dir):
-                            print(f"DEBUG: Output dir writable: {os.access(output_dir, os.W_OK)}")
-                        
-                        return (frame_num, process.returncode, stderr)
-                    return (frame_num, 0, None)
+                    # Return success/failure info
+                    return (frame_num, process.returncode, stderr if process.returncode != 0 else None)
                 except Exception as e:
-                    print(f"DEBUG: Exception for frame {frame_num}: {str(e)}")
                     return (frame_num, -1, str(e))
             
             # Create and start worker threads
@@ -1299,52 +1281,9 @@ class FFmpegUI:
             # Check results
             failures = [r for r in results if r[1] != 0]
             if failures:
-                print("\nDEBUG: DETAILED FAILURE INFORMATION:")
-                for i, failure in enumerate(failures[:10]):  # Show first 10 failures in detail
-                    frame_num, return_code, error_msg = failure
-                    print(f"DEBUG: Frame {frame_num} failed with code {return_code}")
-                    if error_msg:
-                        print(f"DEBUG: Error message: {error_msg}")
-                    # Print the command that was used for this frame
-                    input_file = input_file_pattern.replace("%04d", f"{frame_num:04d}")
-                    output_file = os.path.join(self.temp_dir, f"{before}{frame_num:04d}.png")
-                    print(f"DEBUG: Failed command: oiiotool --colorconfig {ocio_config} {input_file} -o {output_file}")
-                    # Check if input and output files exist
-                    print(f"DEBUG: Input file exists: {os.path.exists(input_file)}")
-                    print(f"DEBUG: Output directory exists: {os.path.exists(os.path.dirname(output_file))}")
-                    print(f"DEBUG: Output directory writable: {os.access(os.path.dirname(output_file), os.W_OK)}")
-                    print(f"DEBUG: ---")
-                
-                # Also check temp directory status
-                print(f"DEBUG: Temp directory: {self.temp_dir}")
-                print(f"DEBUG: Temp directory exists: {os.path.exists(self.temp_dir)}")
-                if os.path.exists(self.temp_dir):
-                    print(f"DEBUG: Temp directory writable: {os.access(self.temp_dir, os.W_OK)}")
-                    print(f"DEBUG: Temp directory contents: {os.listdir(self.temp_dir)}")
-                    # Check disk space
-                    try:
-                        stat = os.statvfs(self.temp_dir)
-                        free_space_mb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024)
-                        print(f"DEBUG: Free space in temp directory: {free_space_mb:.2f} MB")
-                    except Exception as e:
-                        print(f"DEBUG: Error checking disk space: {e}")
-                
                 error_frames = ", ".join(str(f[0]) for f in failures[:5])
                 more_text = f" and {len(failures) - 5} more" if len(failures) > 5 else ""
-                
-                # Get first error message for display
-                first_error = failures[0][2] if failures and len(failures) > 0 and failures[0][2] else "Unknown error"
-                first_error_preview = first_error[:150] + "..." if len(first_error) > 150 else first_error
-                
-                error_msg = (
-                    f"Failed to convert {len(failures)} frames (frames {error_frames}{more_text})\n\n"
-                    f"Sample error: {first_error_preview}\n\n"
-                    f"Possible issues:\n"
-                    f"1. Check if OCIO configuration exists at {ocio_config}\n"
-                    f"2. Verify permissions on temp directory: {self.temp_dir}\n"
-                    f"3. Check disk space in temp location\n"
-                    f"4. Verify input EXR files exist and are readable"
-                )
+                error_msg = f"Failed to convert {len(failures)} frames (frames {error_frames}{more_text})"
                 print(f"DEBUG: {error_msg}")
                 self.queue.put(('error', error_msg))
                 return

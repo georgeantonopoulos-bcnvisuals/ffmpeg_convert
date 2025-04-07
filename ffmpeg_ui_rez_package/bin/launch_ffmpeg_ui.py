@@ -6,7 +6,7 @@ import os
 
 def launch_ui():
     try:
-        cmd = ["rez", "env", "openimageio", "tkinter", "--", "python", os.path.abspath("ffmpeg_ui.py")]
+        cmd = ["rez", "env", "openimageio", "tkinter", "--", "python", "ffmpeg_ui.py"]
         print(f"Running: {' '.join(cmd)}")
         
         # Remove PIPE capture and let output flow through directly

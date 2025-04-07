@@ -2,6 +2,7 @@
 tmp_files/
 *.log
 *.error.log
+error.txt
 
 last_input_folder.json
 ffmpeg_settings.json
