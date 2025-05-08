@@ -256,9 +256,15 @@ class FFmpegUI:
             self.output_folder.insert(0, self.settings["last_output_folder"])
         ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=8, column=2, padx=10, pady=5)
 
+        # Audio Options
+        ttk.Label(root, text="Audio Options:", font=self.title_font).grid(row=9, column=0, sticky="w", padx=10, pady=5)
+        self.audio_option_var = tk.StringVar(value="No Audio")
+        self.audio_option_dropdown = ttk.Combobox(root, textvariable=self.audio_option_var, values=["No Audio", "Blank Audio Track"], state="readonly")
+        self.audio_option_dropdown.grid(row=9, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
+
         # Add temp directory location selection in a frame
         self.temp_dir_frame = ttk.Frame(root)
-        self.temp_dir_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.temp_dir_frame.grid(row=10, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         ttk.Label(self.temp_dir_frame, text="Temp Directory Location:", font=self.title_font).grid(row=0, column=0, sticky="w")
         self.temp_dir_var = tk.StringVar(value="source folder")
         self.temp_dir_dropdown = ttk.Combobox(self.temp_dir_frame, textvariable=self.temp_dir_var, values=["source folder", "temporal drive", "tmp dir"], state="readonly", width=40)
@@ -267,7 +273,7 @@ class FFmpegUI:
 
         # Add ACES color space selection
         self.aces_frame = ttk.Frame(root)
-        self.aces_frame.grid(row=10, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.aces_frame.grid(row=11, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.aces_frame.grid_remove()  # Initially hidden
 
         ttk.Label(self.aces_frame, text="EXR Color Space:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=5, pady=5)
@@ -290,14 +296,14 @@ class FFmpegUI:
         self.color_space_dropdown['values'] = self.color_spaces
 
         # Move the Run FFmpeg button to after the ACES frame
-        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=11, column=1, pady=20)
+        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=12, column=1, pady=20)
 
         # Codec-specific options frames
         self.h264_h265_frame = ttk.Frame(root)
-        self.h264_h265_frame.grid(row=12, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.h264_h265_frame.grid(row=13, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
 
         self.prores_frame = ttk.Frame(root)
-        self.prores_frame.grid(row=12, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        self.prores_frame.grid(row=13, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
         self.prores_frame.grid_remove()  # Initially hidden
 
         # Initialize codec-specific variables
@@ -330,21 +336,21 @@ class FFmpegUI:
         # Progress Bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(root, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.grid(row=13, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
+        self.progress_bar.grid(row=14, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
 
         # Status Label
         self.status_label = ttk.Label(root, text="", font=self.custom_font)
-        self.status_label.grid(row=14, column=0, columnspan=3, padx=10, pady=(5,20))
+        self.status_label.grid(row=15, column=0, columnspan=3, padx=10, pady=(5,20))
 
         # FFmpeg Output Text Widget
         self.output_text = tk.Text(root, height=10, width=80, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff')
-        self.output_text.grid(row=15, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
+        self.output_text.grid(row=16, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
         self.output_scrollbar = ttk.Scrollbar(root, orient='vertical', command=self.output_text.yview)
-        self.output_scrollbar.grid(row=15, column=3, sticky='ns')
+        self.output_scrollbar.grid(row=16, column=3, sticky='ns')
         self.output_text['yscrollcommand'] = self.output_scrollbar.set
 
         # Configure the new row to expand
-        root.grid_rowconfigure(15, weight=1)
+        root.grid_rowconfigure(16, weight=1)
 
         # Initialize codec-specific UI based on default selection
         self.update_codec()
@@ -840,7 +846,7 @@ class FFmpegUI:
             start_frame, end_frame = self.frame_range
             input_pattern = pattern  # Use the updated pattern
             input_path = os.path.join(img_folder, input_pattern)
-            input_args = [
+            image_sequence_input_args = [
                 "-start_number", str(start_frame),
                 "-framerate", str(source_framerate),  # Use source frame rate for input
                 "-i", input_path
@@ -851,8 +857,8 @@ class FFmpegUI:
 
         output_path = os.path.join(output_dir, output_file)
 
-        # Determine the codec parameters
-        codec_params = []
+        # Determine the codec parameters for video
+        video_codec_params = []
         if codec in ["h264", "h265"]:
             bitrate = self.mp4_bitrate.get()
             crf = self.mp4_crf.get()
@@ -861,7 +867,7 @@ class FFmpegUI:
                 return
             
             codec_lib = "libx264" if codec == "h264" else "libx265"
-            codec_params = [
+            video_codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
                 "-b:v", f"{bitrate}M",
@@ -869,9 +875,9 @@ class FFmpegUI:
                 "-bufsize", f"{int(float(bitrate)*2)}M"
             ]
             if codec == "h264":
-                codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
+                video_codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
             else:
-                codec_params.extend(["-tag:v", "hvc1"])
+                video_codec_params.extend(["-tag:v", "hvc1"])
         elif codec.startswith("prores"):
             profile = self.prores_profile.get()
             qscale = self.prores_qscale.get()
@@ -879,47 +885,82 @@ class FFmpegUI:
                 self.queue.put(('error', "ProRes profile and Quality settings are required for ProRes encoding."))
                 return
             
-            codec_params = [
+            video_codec_params = [
                 "-c:v", "prores_ks",
                 "-profile:v", profile,
                 "-qscale:v", qscale
             ]
         elif codec == "qtrle":
-            codec_params = [
+            video_codec_params = [
                 "-c:v", "qtrle",
-                "-pix_fmt", "rgb24"
+                # "-pix_fmt", "rgb24" # This will be handled later by general pix_fmt for output
             ]
         else:
             self.queue.put(('error', "Unsupported codec selected."))
             return
 
-        # Use a single setpts filter with the calculated scale factor
+        # Video filters
         setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
-        ffmpeg_filter_args = ["-vf", ffmpeg_filters]
+        # Scale filter for color matrix should ideally be more context-aware based on input if not bt709
+        ffmpeg_filters_str = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+        video_filter_args = ["-vf", ffmpeg_filters_str]
+        
         frames_arg = ["-frames:v", str(total_frames_needed)]
-        color_space_args = [
+        
+        output_color_space_args = [
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
             "-colorspace", "bt709"
         ]
 
-        # Construct the ffmpeg command
-        cmd = [
-            "ffmpeg",
-            "-accurate_seek",
-            "-ss", "0",
-            "-t", f"{desired_duration:.6f}"
-        ] + input_args + [
-            "-r", str(output_framerate),  # Use output frame rate for output
-            "-vsync", "cfr"
-        ] + ffmpeg_filter_args + frames_arg + [
-            "-pix_fmt", "yuv420p",
-            "-video_track_timescale", "30000",
-            "-an"
-        ] + codec_params + color_space_args + [
-            output_path
+        # --- Construct the ffmpeg command --- 
+        cmd = ["ffmpeg", "-accurate_seek"] # Base command and global options
+
+        # --- INPUTS ---
+        # Image sequence input (with -ss 0 for fast seeking at start of this input)
+        cmd += ["-ss", "0"] + image_sequence_input_args
+
+        # Audio input (if blank audio selected)
+        audio_option = self.audio_option_var.get()
+        blank_audio_input_args = []
+        output_audio_handling_args = [] # For -an or audio codec settings
+
+        if audio_option == "Blank Audio Track":
+            blank_audio_input_args = [
+                "-f", "lavfi",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-shortest"  # Ensures this silent audio input matches duration of other inputs
+            ]
+            # Note: Audio codec for blank track will use FFmpeg default or could be specified here.
+            # e.g., output_audio_handling_args.extend(["-c:a", "aac", "-b:a", "128k"])
+        elif audio_option == "No Audio":
+            output_audio_handling_args = ["-an"] # Output option to disable audio
+
+        cmd += blank_audio_input_args # Add blank audio input args if any
+
+        # --- OUTPUTS, FILTERS, CODECS ---
+        cmd += [
+            "-t", f"{desired_duration:.6f}",   # Output duration
+            "-r", str(output_framerate),       # Output frame rate
+            "-fps_mode", "cfr",                # Replaces deprecated -vsync cfr for constant frame rate
         ]
+        
+        cmd += video_filter_args # Video filters (-vf)
+
+        # Pixel format and video track timescale
+        # For qtrle (Animation codec), rgb24 is often used. For others, yuv420p is common for compatibility.
+        output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
+        cmd += [
+            "-pix_fmt", output_pix_fmt,
+            "-video_track_timescale", "30000"
+        ]
+        
+        cmd += output_audio_handling_args # Add -an if no audio, or audio codec settings
+        
+        cmd += video_codec_params         # Video codec settings from UI
+        cmd += output_color_space_args     # Output video color space settings
+
+        cmd += [output_path]                # Output file path
 
         print("FFmpeg command:", " ".join(cmd))
 
