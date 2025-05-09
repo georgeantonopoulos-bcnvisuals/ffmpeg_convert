@@ -130,6 +130,8 @@ class FFmpegUI:
         # Load settings
         self.settings = self.load_settings()
         
+        self.original_exr_path = None # Initialize placeholder for original EXR path
+
         # Initialize the queue for thread-safe communication
         self.queue = queue.Queue()
 
@@ -678,47 +680,57 @@ class FFmpegUI:
 
         # For now, we'll force image sequence mode since video file handling isn't fully implemented
         input_type = "Image Sequence"
+        img_folder = self.img_seq_folder.get() # Current value in the UI field
         output_dir = self.output_folder.get().strip()
         output_file = self.output_filename.get().strip()
         codec = self.codec_var.get()
+        pattern = self.filename_pattern.get()
+        is_exr_pattern = pattern.lower().endswith('.exr') # Based on the current pattern in UI
 
-        print(f"=== Starting run_ffmpeg ===")
-        print("Initial values:")
-        print(f"- Input type: {input_type}")
-        print(f"- Output dir: {output_dir}")
-        print(f"- Output file: {output_file}")
-        print(f"- Codec: {codec}")
+        # Initial debug prints for run_ffmpeg call
+        print(f"=== Starting run_ffmpeg ({'EXR pattern' if is_exr_pattern else 'Non-EXR pattern'}) ===")
+        print(f"  Input folder from UI: {img_folder}")
+        print(f"  Pattern from UI: {pattern}")
+        if hasattr(self, 'original_exr_path'):
+            print(f"  Current self.original_exr_path: {self.original_exr_path}")
+        if hasattr(self, 'temp_dir'):
+            print(f"  Current self.temp_dir: {self.temp_dir}")
+
+        # Check if this call is for processing temporary PNGs from a previous EXR conversion
+        is_processing_temp_pngs_from_exr = (hasattr(self, 'temp_dir') and self.temp_dir and \
+                                           hasattr(self, 'original_exr_path') and self.original_exr_path and \
+                                           img_folder == self.temp_dir and not is_exr_pattern)
+        
+        print(f"  Is processing temp PNGs from EXR stage: {is_processing_temp_pngs_from_exr}")
 
         # Check input directory
-        img_folder = self.img_seq_folder.get()
-        print(f"\nChecking input folder: {img_folder}")
+        print(f"  Checking input folder: {img_folder}")
         if not os.path.exists(img_folder):
-            print("Error: Input folder does not exist")
+            print("  Error: Input folder does not exist")
             messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
             return
 
-        # Get filename pattern from UI
-        pattern = self.filename_pattern.get()
-        is_exr = pattern.lower().endswith('.exr')
+        # Get filename pattern from UI (already done)
+        # is_exr = pattern.lower().endswith('.exr') # Redundant, use is_exr_pattern
 
-        # Check if frame_range exists before continuing
+        # Check if frame_range exists before continuing (relevant for both EXR first pass and direct sequence)
         if not hasattr(self, 'frame_range'):
             messagebox.showerror("Error", "No image sequence detected. Please select an image sequence folder first.")
             return
             
-        # If input is EXR, run conversion in a separate thread
-        if is_exr:
+        # If input is EXR (and not the temp PNG stage), run conversion in a separate thread
+        if is_exr_pattern and not is_processing_temp_pngs_from_exr:
+            print("  Debug: EXR sequence (first pass). Storing original path and starting EXR conversion.")
+            self.original_exr_path = img_folder # Store the original EXR path from UI
+            
             # Ensure pattern includes '%04d'
             if "%04d" in pattern:
-                before, after = pattern.split("%04d", 1)
+                before_split, after_split = pattern.split("%04d", 1)
             else:
                 messagebox.showerror("Error", "Filename pattern must contain '%04d' for image sequence.")
                 return
 
             # start_frame and end_frame are expected to have been set during sequence detection
-            if not hasattr(self, 'frame_range'):
-                messagebox.showerror("Error", "Frame range not detected. Please select the image sequence folder again.")
-                return
             start_frame, end_frame = self.frame_range
             
             # Store all parameters for second stage processing
@@ -746,10 +758,22 @@ class FFmpegUI:
             # Launch the conversion in a separate thread so that the UI isn't blocked.
             conversion_thread = threading.Thread(
                 target=self.convert_exr_files,
-                args=(img_folder, pattern, start_frame, end_frame, before)
+                args=(img_folder, pattern, start_frame, end_frame, before_split)
             )
             conversion_thread.start()
             return  # Return immediately so that the UI remains responsive
+        
+        elif not is_exr_pattern and not is_processing_temp_pngs_from_exr:
+            # This is a direct non-EXR sequence (e.g., PNG, JPG directly selected by user)
+            # and not the second pass of an EXR job.
+            print("  Debug: Direct non-EXR sequence (user selected PNG/JPG etc.). Clearing original_exr_path.")
+            self.original_exr_path = None
+        
+        # If we reach here, it's either:
+        # a) A direct non-EXR sequence (self.original_exr_path is None).
+        # b) The second pass of an EXR->PNG conversion (self.original_exr_path holds original EXR path, img_folder is temp_dir).
+        print(f"  Debug: Proceeding to FFmpeg video encoding. Current self.original_exr_path = {self.original_exr_path}")
+
 
         # Validate output directory
         if not output_dir:
@@ -931,8 +955,8 @@ class FFmpegUI:
                 "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
                 "-shortest"  # Ensures this silent audio input matches duration of other inputs
             ]
-            # Note: Audio codec for blank track will use FFmpeg default or could be specified here.
-            # e.g., output_audio_handling_args.extend(["-c:a", "aac", "-b:a", "128k"])
+            # Explicitly set audio codec and bitrate for the blank track
+            output_audio_handling_args.extend(["-c:a", "aac", "-b:a", "128k"])
         elif audio_option == "No Audio":
             output_audio_handling_args = ["-an"] # Output option to disable audio
 
@@ -1057,7 +1081,12 @@ class FFmpegUI:
             else:
                 success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
                 self.queue.put(('success', success_message))
-            
+
+                # If original_exr_path is set, it means we converted EXRs and should restore the path
+                if hasattr(self, 'original_exr_path') and self.original_exr_path:
+                    self.queue.put(('restore_path', self.original_exr_path))
+                    self.original_exr_path = None # Clear it after use
+
         except Exception as e:
             self.queue.put(('error', f"Unexpected error: {str(e)}"))
 
@@ -1081,6 +1110,11 @@ class FFmpegUI:
                 elif msg_type == 'prepare_ffmpeg':
                     # Handle FFmpeg preparation on main thread
                     self.prepare_ffmpeg_conversion(content)
+                elif msg_type == 'restore_path':
+                    self.img_seq_folder.delete(0, tk.END)
+                    self.img_seq_folder.insert(0, content)
+                    self.output_text.insert(tk.END, f"INFO: Input path restored to: {content}\n")
+                    self.output_text.see(tk.END)
         except queue.Empty:
             pass
         finally:
