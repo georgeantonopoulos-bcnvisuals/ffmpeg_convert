@@ -16,6 +16,12 @@ import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
 
+# Add at top with other imports
+try:
+    from ttkthemes import ThemedStyle  # pip install ttkthemes
+except ImportError:
+    ThemedStyle = None
+
 # Create a custom logger class to duplicate output
 class TeeLogger:
     def __init__(self, filename, mode='a', stream=None):
@@ -141,7 +147,7 @@ class FFmpegUI:
 
         # Set up dark theme
         self.style = ttk.Style()
-        self.style.theme_use("clam")
+        #self.style.theme_use("clam")
 
         # Load the custom TCL files
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -184,6 +190,13 @@ class FFmpegUI:
                        selectforeground=[('readonly', '#ffffff')],
                        fieldbackground=[('readonly', '#3c3f41')],
                        background=[('readonly', '#3c3f41')])
+
+        # Additional modern styling for common widgets
+        self.style.configure("TLabel",    background="#2b2b2b", foreground="#ffffff")
+        self.style.configure("TFrame",    background="#2b2b2b")
+        self.style.configure("TCheckbutton", background="#2b2b2b", foreground="#ffffff")
+        self.style.configure("TRadiobutton", background="#2b2b2b", foreground="#ffffff")
+        self.style.configure("TMenubutton",  relief="flat", borderwidth=1, background="#3c3f41", foreground="#ffffff")
 
         # Button style with outline and round edges (complementing TCL)
         self.style.configure("TButton",
@@ -444,6 +457,16 @@ class FFmpegUI:
         # Initialize UI states
         self.update_codec() 
         self.root.after(100, self.process_queue)
+
+        # Load window icon if available
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(script_dir, "ffmpeg_ui_icon.png")
+        if os.path.exists(icon_path):
+            try:
+                self._icon_img = tk.PhotoImage(file=icon_path)
+                self.root.iconphoto(False, self._icon_img)
+            except Exception as e:
+                print(f"Could not load window icon: {e}")
 
     def _create_labeled_entry(self, parent, label_text, row, col_offset=0, default_value="", browse_command=None, entry_var=None, bind_event=None, bind_callback=None, columnspan_entry=1, columnspan_label=1, sticky_label="w", sticky_entry="ew", padx_label=(10,5), pady_label=(8,8), padx_entry=(5,10), pady_entry=(8,8), padx_browse=(5,10), pady_browse=(8,8), entry_width=None):
         label = ttk.Label(parent, text=label_text, font=self.custom_font)
