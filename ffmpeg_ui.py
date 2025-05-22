@@ -395,8 +395,8 @@ class FFmpegUI:
         self.h264_h265_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         self.h264_h265_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
         
-        _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10)
-        _, self.crf_entry = self._create_labeled_entry(self.h264_h265_frame, "CRF:", row=1, entry_var=self.mp4_crf, default_value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]), entry_width=10)
+        _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
+        _, self.crf_entry = self._create_labeled_entry(self.h264_h265_frame, "CRF:", row=1, entry_var=self.mp4_crf, default_value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
         
         # ProRes Frame
         self.prores_frame = ttk.Frame(output_codec_settings_frame)
@@ -1307,6 +1307,8 @@ class FFmpegUI:
         print("\nDEBUG: convert_exr_files starting")
         self.queue.put(('output', "\nDEBUG: Starting EXR conversion (thread)...\n"))
         
+        # Define OCIO configuration path
+        ocio_config = "/mnt/studio/config/ocio/aces_1.2/config.ocio"
         # First try to create temp directory as a subdirectory of the input folder
         temp_dir_name = f"ffmpeg_tmp_{os.getpid()}"
         
@@ -1432,7 +1434,7 @@ class FFmpegUI:
             cmd = [
                 "oiiotool",
                 "-v",
-                "--colorconfig", "/mnt/studio/config/ocio/aces_1.2/config.ocio",
+                "--colorconfig", ocio_config,
                 "--threads", "1",  # Use single thread per file
                 input_file,
                 "--ch", "R,G,B",
