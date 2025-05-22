@@ -125,6 +125,7 @@ class FFmpegUI:
         self.active_processes = []
         self.active_threads = []
         self.is_shutting_down = False  # Add flag to prevent multiple cleanup attempts
+        self.last_successful_output_dir = None # For "Open Output Folder" button
         
         # Set up signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -419,7 +420,7 @@ class FFmpegUI:
         process_log_frame.grid(row=2, column=0, sticky="nsew", padx=15, pady=(10,15)) # Increased padding
         # Configure grid for process_log_frame
         process_log_frame.grid_columnconfigure(0, weight=1) # Make the first column (where button and progress bar are) expand
-        process_log_frame.grid_rowconfigure(3, weight=1)    # Make the text area row expand
+        process_log_frame.grid_rowconfigure(4, weight=1)    # Make the text area row (now row 4) expand
 
         self.run_button = ttk.Button(process_log_frame, text="Run FFmpeg", command=self.run_ffmpeg)
         # To center the button, we can make it span one column and rely on the parent's column configure
@@ -432,9 +433,12 @@ class FFmpegUI:
         self.status_label = ttk.Label(process_log_frame, text="", font=self.custom_font)
         self.status_label.grid(row=2, column=0, padx=5, pady=(5,0), sticky='ew')
 
+        # "Open Output Folder" button - created here, gridded by process_queue
+        self.open_output_folder_button = ttk.Button(process_log_frame, text="Open Output Folder", command=self._open_last_output_folder)
+
         # Text area and scrollbar
         text_area_frame = ttk.Frame(process_log_frame) # Use a frame to hold text and scrollbar
-        text_area_frame.grid(row=3, column=0, sticky='nsew', padx=5, pady=5)
+        text_area_frame.grid(row=4, column=0, sticky='nsew', padx=5, pady=5) # Moved to row 4
         text_area_frame.grid_rowconfigure(0, weight=1)
         text_area_frame.grid_columnconfigure(0, weight=1)
 
@@ -951,6 +955,9 @@ class FFmpegUI:
             messagebox.showerror("Error", "Please enter an output filename")
             return
 
+        # Hide the "Open Output Folder" button at the start of a new process
+        self.queue.put(('hide_open_folder_button', None))
+
         # Construct full output path
         output_path = os.path.join(output_dir, output_file)
 
@@ -1233,6 +1240,7 @@ class FFmpegUI:
             else:
                 success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
                 self.queue.put(('success', success_message))
+                self.queue.put(('show_open_folder_button', os.path.dirname(output_path))) # Send output directory
 
                 # If original_exr_path is set, it means we converted EXRs and should restore the path
                 if hasattr(self, 'original_exr_path') and self.original_exr_path:
@@ -1270,6 +1278,12 @@ class FFmpegUI:
                         self.img_seq_folder_var.set(content)
                     self.output_text.insert(tk.END, f"INFO: Input path restored to: {content}\n")
                     self.output_text.see(tk.END)
+                elif msg_type == 'show_open_folder_button':
+                    self.last_successful_output_dir = content
+                    self.open_output_folder_button.grid(row=3, column=0, pady=(5,10)) # Grid below status_label
+                elif msg_type == 'hide_open_folder_button':
+                    self.open_output_folder_button.grid_remove()
+                    self.last_successful_output_dir = None
         except queue.Empty:
             pass
         finally:
@@ -1850,6 +1864,21 @@ class FFmpegUI:
         remaining_stderr = process.stderr.read()
         if remaining_stderr:
             self.queue.put(('output', remaining_stderr))
+
+    def _open_last_output_folder(self):
+        if self.last_successful_output_dir:
+            try:
+                if sys.platform == "win32":
+                    os.startfile(self.last_successful_output_dir)
+                elif sys.platform == "darwin": # macOS
+                    subprocess.Popen(["open", self.last_successful_output_dir])
+                else: # Linux and other UNIX-like systems
+                    subprocess.Popen(["xdg-open", self.last_successful_output_dir])
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to open output folder: {e}")
+                print(f"Failed to open output folder: {e}")
+        else:
+            messagebox.showinfo("Info", "No output folder available. Please run a successful conversion first.")
 
 if __name__ == "__main__":
     check_and_install_dependencies()
