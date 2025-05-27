@@ -16,6 +16,12 @@ import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
 
+# Add at top with other imports
+try:
+    from ttkthemes import ThemedStyle  # pip install ttkthemes
+except ImportError:
+    ThemedStyle = None
+
 # Create a custom logger class to duplicate output
 class TeeLogger:
     def __init__(self, filename, mode='a', stream=None):
@@ -106,8 +112,8 @@ class FFmpegUI:
         self.root = root
         self.root.title("FFmpeg GUI")
         self.root.configure(bg='#2b2b2b')
-        self.root.geometry("800x700")  # Increased height to accommodate new label
-        self.root.minsize(600, 400)    # Set minimum window size
+        self.root.geometry("850x950") # Adjusted geometry for new layout
+        self.root.minsize(700, 600)    # Set minimum window size
 
         # Create tmp_files directory in script location
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -119,6 +125,7 @@ class FFmpegUI:
         self.active_processes = []
         self.active_threads = []
         self.is_shutting_down = False  # Add flag to prevent multiple cleanup attempts
+        self.last_successful_output_dir = None # For "Open Output Folder" button
         
         # Set up signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -130,16 +137,18 @@ class FFmpegUI:
         # Load settings
         self.settings = self.load_settings()
         
+        self.original_exr_path = None # Initialize placeholder for original EXR path
+
         # Initialize the queue for thread-safe communication
         self.queue = queue.Queue()
 
         # Custom font
         self.custom_font = Font(family="Roboto", size=10)
-        self.title_font = Font(family="Roboto", size=12, weight="bold")
+        self.title_font = Font(family="Roboto", size=11, weight="bold") # Slightly smaller title for LabelFrames
 
         # Set up dark theme
         self.style = ttk.Style()
-        self.style.theme_use("clam")
+        #self.style.theme_use("clam")
 
         # Load the custom TCL files
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -159,22 +168,54 @@ class FFmpegUI:
                                  fieldbackground="#3c3f41",
                                  font=self.custom_font)
         
-        # Button style with outline and round edges
+        # General widget styling enhancements
+        self.style.configure("TEntry", 
+                             relief="flat", 
+                             borderwidth=1, 
+                             bordercolor="#555555", # Subtle border for entries
+                             fieldbackground="#3c3f41",
+                             foreground="#ffffff",
+                             insertbackground="#ffffff") # Cursor color
+        self.style.map("TEntry",
+                       bordercolor=[('focus', '#777777')]) # Border color on focus
+
+        self.style.configure("TCombobox", 
+                             relief="flat", 
+                             borderwidth=1,
+                             bordercolor="#555555",
+                             arrowcolor="#ffffff",
+                             foreground="#ffffff")
+        self.style.map("TCombobox",
+                       bordercolor=[('focus', '#777777')],
+                       selectbackground=[('readonly', '#4a4a4a')], # Slightly lighter selection
+                       selectforeground=[('readonly', '#ffffff')],
+                       fieldbackground=[('readonly', '#3c3f41')],
+                       background=[('readonly', '#3c3f41')])
+
+        # Additional modern styling for common widgets
+        self.style.configure("TLabel",    background="#2b2b2b", foreground="#ffffff")
+        self.style.configure("TFrame",    background="#2b2b2b")
+        self.style.configure("TCheckbutton", background="#2b2b2b", foreground="#ffffff")
+        self.style.configure("TRadiobutton", background="#2b2b2b", foreground="#ffffff")
+        self.style.configure("TMenubutton",  relief="flat", borderwidth=1, background="#3c3f41", foreground="#ffffff")
+
+        # Button style with outline and round edges (complementing TCL)
         self.style.configure("TButton",
                              padding=6,
                              relief="flat",
-                             background="#3c3f41",
+                             background="#4a4a4a", # Slightly lighter button background
+                             foreground="#ffffff",
                              borderwidth=1,
-                             bordercolor="#ffffff",
-                             lightcolor="#ffffff",
-                             darkcolor="#ffffff")
+                             bordercolor="#666666", # Subtle border for buttons
+                             focusthickness=0) # Remove focus ring if TCL handles it
         self.style.map("TButton",
-                       background=[('active', '#4c4c4c')])
+                       background=[('active', '#5c5c5c'), ('pressed', '#5c5c5c')],
+                       bordercolor=[('active', '#888888')])
         
         # Configure grid
-        self.root.grid_columnconfigure(1, weight=1)
-        for i in range(12):  # Increased range to accommodate new widgets
-            self.root.grid_rowconfigure(i, weight=1)
+        # self.root.grid_columnconfigure(1, weight=1) # Old configuration
+        # for i in range(12):  # Increased range to accommodate new widgets # Old configuration
+        #     self.root.grid_rowconfigure(i, weight=1) # Old configuration
 
         # Configure progress bar style
         self.style.configure(
@@ -193,167 +234,298 @@ class FFmpegUI:
             fieldbackground=[('readonly', '#2b2b2b')],
             background=[('readonly', '#2b2b2b')]
         )
-
-        # Load last used input folder
-        self.last_input_folder = self.settings["last_input_folder"]
-
-        # Input Type Selection
-        ttk.Label(root, text="Input Type:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=10, pady=(20,5))
-        self.input_type_var = tk.StringVar(value="Image Sequence")
-        self.input_type_dropdown = ttk.Combobox(root, textvariable=self.input_type_var, values=["Image Sequence"], state="readonly")
-        self.input_type_dropdown.grid(row=0, column=1, sticky="ew", padx=10, pady=(20,5))
-
-        # Image Sequence Selection
-        ttk.Label(root, text="Image Sequence Folder:", font=self.title_font).grid(row=1, column=0, sticky="w", padx=10, pady=(20,5))
-        self.img_seq_folder = ttk.Entry(root)
-        self.img_seq_folder.grid(row=1, column=1, sticky="ew", padx=10, pady=(20,5))
-        self.img_seq_folder.insert(0, self.last_input_folder)
-        ttk.Button(root, text="Browse", command=self.browse_img_seq).grid(row=1, column=2, padx=10, pady=(20,5))
-
-        ttk.Label(root, text="Filename Pattern:", font=self.title_font).grid(row=2, column=0, sticky="w", padx=10, pady=5)
-        self.filename_pattern = ttk.Entry(root)
-        self.filename_pattern.grid(row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
-
-        # Codec Selection
-        ttk.Label(root, text="Codec:", font=self.title_font).grid(row=3, column=0, sticky="w", padx=10, pady=5)
-        self.codec_var = tk.StringVar(value=self.settings["codec"])
-        self.codec_dropdown = ttk.Combobox(root, textvariable=self.codec_var, values=["h264", "h265", "prores_422", "prores_422_lt", "prores_444", "qtrle"], state="readonly")
-        self.codec_dropdown.grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
-        self.codec_dropdown.bind("<<ComboboxSelected>>", self.update_codec)
-
-        # Frame Rate Selection - modify this section
-        ttk.Label(root, text="Source Frame Rate (fps):", font=self.title_font).grid(row=4, column=0, sticky="w", padx=10, pady=5)
-        self.source_frame_rate = ttk.Entry(root)
-        self.source_frame_rate.insert(0, self.settings.get("source_frame_rate", "60"))
-        self.source_frame_rate.grid(row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
-        self.source_frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
-
-        ttk.Label(root, text="Output Frame Rate (fps):", font=self.title_font).grid(row=5, column=0, sticky="w", padx=10, pady=5)
-        self.frame_rate = ttk.Entry(root)
-        self.frame_rate.insert(0, self.settings["frame_rate"])
-        self.frame_rate.grid(row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
-        self.frame_rate.bind("<KeyRelease>", self.update_duration)  # Update duration on frame rate change
-
-        # Desired Duration Input
-        ttk.Label(root, text="Desired Duration (seconds):", font=self.title_font).grid(row=6, column=0, sticky="w", padx=10, pady=5)
-        self.desired_duration = ttk.Entry(root)
-        self.desired_duration.insert(0, self.settings["desired_duration"])
-        self.desired_duration.grid(row=6, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
-        self.desired_duration.bind("<KeyRelease>", self.update_duration)  # Update duration on duration change
-
-        # Output File Name
-        ttk.Label(root, text="Output Filename:", font=self.title_font).grid(row=7, column=0, sticky="w", padx=10, pady=5)
-        self.output_filename = ttk.Entry(root)
-        self.output_filename.insert(0, "output.mp4")
-        self.output_filename.grid(row=7, column=1, columnspan=2, sticky="ew", padx=10, pady=5)
-
-        # Output Folder Selection
-        ttk.Label(root, text="Output Folder:", font=self.title_font).grid(row=8, column=0, sticky="w", padx=10, pady=5)
-        self.output_folder = ttk.Entry(root)
-        self.output_folder.grid(row=8, column=1, sticky="ew", padx=10, pady=5)
-        # Initialize output folder from settings
-        if self.settings["last_output_folder"]:
-            self.output_folder.insert(0, self.settings["last_output_folder"])
-        ttk.Button(root, text="Browse", command=self.browse_output_folder).grid(row=8, column=2, padx=10, pady=5)
-
-        # Add temp directory location selection in a frame
-        self.temp_dir_frame = ttk.Frame(root)
-        self.temp_dir_frame.grid(row=9, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
-        ttk.Label(self.temp_dir_frame, text="Temp Directory Location:", font=self.title_font).grid(row=0, column=0, sticky="w")
-        self.temp_dir_var = tk.StringVar(value="source folder")
-        self.temp_dir_dropdown = ttk.Combobox(self.temp_dir_frame, textvariable=self.temp_dir_var, values=["source folder", "temporal drive", "tmp dir"], state="readonly", width=40)
-        self.temp_dir_dropdown.grid(row=0, column=1, columnspan=2, sticky="ew")
-        self.temp_dir_frame.grid_remove()  # Initially hidden
-
-        # Add ACES color space selection
-        self.aces_frame = ttk.Frame(root)
-        self.aces_frame.grid(row=10, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
-        self.aces_frame.grid_remove()  # Initially hidden
-
-        ttk.Label(self.aces_frame, text="EXR Color Space:", font=self.title_font).grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        self.color_space_var = tk.StringVar(value="ACES - ACEScg")
-        self.color_space_dropdown = ttk.Combobox(self.aces_frame, textvariable=self.color_space_var, state="readonly", width=40)
-        self.color_space_dropdown.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
         
-        # Common ACES color spaces
+        # ttk.LabelFrame style
+        self.style.configure("TLabelframe", 
+                             padding=10, 
+                             relief="solid", # Cleaner relief
+                             borderwidth=1,
+                             bordercolor="#444444", # Darker border for labelframe
+                             background="#2b2b2b")
+        self.style.configure("TLabelframe.Label", 
+                             font=self.title_font, 
+                             foreground="#dddddd", # Brighter label text
+                             background="#2b2b2b",
+                             padding=(0,0,0,5)) # Add some bottom padding to label title
+
+
+        # --- Main Layout ---
+        # Configure root grid for the main LabelFrames
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=0) # Input Settings
+        self.root.grid_rowconfigure(1, weight=0) # Output & Codec Settings
+        self.root.grid_rowconfigure(2, weight=1) # Process & Log
+
+        # --- Input Settings Frame ---
+        input_settings_frame = ttk.LabelFrame(self.root, text="Input Settings")
+        input_settings_frame.grid(row=0, column=0, sticky="nsew", padx=15, pady=(15,10)) # Increased padding
+        input_settings_frame.grid_columnconfigure(1, weight=1) # Allow entry fields to expand
+
+        current_row_input = 0
+        self.input_type_var, self.input_type_dropdown = self._create_labeled_combobox(
+            input_settings_frame, "Input Type:", row=current_row_input,
+            default_value="Image Sequence", values=["Image Sequence"], state="readonly",
+            columnspan_combo=2 # Span 2 columns including potential browse button space
+        )
+        current_row_input += 1
+
+        self.img_seq_folder_var, self.img_seq_folder_entry, _ = self._create_labeled_entry(
+            input_settings_frame, "Image Sequence Folder:", row=current_row_input,
+            default_value=self.settings.get("last_input_folder", ""), 
+            browse_command=self.browse_img_seq,
+            columnspan_entry=1 # Entry spans 1, browse button takes the next
+        )
+        # Manually assign to self.img_seq_folder for compatibility with existing code
+        self.img_seq_folder = self.img_seq_folder_entry 
+        current_row_input += 1
+
+        self.filename_pattern_var, self.filename_pattern_entry = self._create_labeled_entry(
+            input_settings_frame, "Filename Pattern:", row=current_row_input,
+            columnspan_entry=2 # Span 2 columns as there's no browse button
+        )
+        self.filename_pattern = self.filename_pattern_entry # Compatibility
+        current_row_input += 1
+
+        self.source_frame_rate_var, self.source_frame_rate_entry = self._create_labeled_entry(
+            input_settings_frame, "Source Frame Rate (fps):", row=current_row_input,
+            default_value=self.settings.get("source_frame_rate", "60"),
+            bind_event="<KeyRelease>", bind_callback=self.update_duration,
+            columnspan_entry=2
+        )
+        self.source_frame_rate = self.source_frame_rate_entry # Compatibility
+        current_row_input += 1
+        
+        # ACES Frame (conditionally shown)
+        self.aces_frame = ttk.Frame(input_settings_frame) # Parent is input_settings_frame
+        self.aces_frame.grid(row=current_row_input, column=0, columnspan=3, sticky="ew", padx=0, pady=0) 
+        self.aces_frame.grid_columnconfigure(1, weight=1)
         self.color_spaces = [
-            "ACES - ACEScg",
-            "ACES - ACES2065-1",
-            "Input - ARRI - Linear - ALEXA Wide Gamut",
-            "Input - RED - Linear - REDWideGamutRGB",
-            "Input - Sony - Linear - S-Gamut3",
-            "Input - Sony - Linear - S-Gamut3.Cine",
-            "Input - Canon - Linear - Canon Cinema Gamut Daylight",
-            "Utility - Linear - Rec.709",
-            "Utility - Linear - sRGB"
+            "ACES - ACEScg", "ACES - ACES2065-1", "Input - ARRI - Linear - ALEXA Wide Gamut",
+            "Input - RED - Linear - REDWideGamutRGB", "Input - Sony - Linear - S-Gamut3",
+            "Input - Sony - Linear - S-Gamut3.Cine", "Input - Canon - Linear - Canon Cinema Gamut Daylight",
+            "Utility - Linear - Rec.709", "Utility - Linear - sRGB"
         ]
-        self.color_space_dropdown['values'] = self.color_spaces
+        self.color_space_var, self.color_space_dropdown = self._create_labeled_combobox(
+            self.aces_frame, "EXR Color Space:", row=0, # Relative row within aces_frame
+            default_value="ACES - ACEScg", values=self.color_spaces, state="readonly",
+            columnspan_combo=1, width=38 
+        )
+        self.color_space_dropdown['values'] = self.color_spaces # Ensure values are set
+        self.aces_frame.grid_remove() # Initially hidden
+        current_row_input += 1 # Increment row for input_settings_frame
 
-        # Move the Run FFmpeg button to after the ACES frame
-        ttk.Button(root, text="Run FFmpeg", command=self.run_ffmpeg).grid(row=11, column=1, pady=20)
+        # Temp Directory Frame (conditionally shown)
+        self.temp_dir_frame = ttk.Frame(input_settings_frame) # Parent is input_settings_frame
+        self.temp_dir_frame.grid(row=current_row_input, column=0, columnspan=3, sticky="ew", padx=0, pady=0)
+        self.temp_dir_frame.grid_columnconfigure(1, weight=1)
+        self.temp_dir_var, self.temp_dir_dropdown = self._create_labeled_combobox(
+            self.temp_dir_frame, "Temp Directory Location:", row=0, # Relative row
+            default_value="source folder", values=["source folder", "temporal drive", "tmp dir"],
+            state="readonly", columnspan_combo=1, width=38 
+        )
+        self.temp_dir_frame.grid_remove() # Initially hidden
+        current_row_input += 1
 
-        # Codec-specific options frames
-        self.h264_h265_frame = ttk.Frame(root)
-        self.h264_h265_frame.grid(row=12, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
 
-        self.prores_frame = ttk.Frame(root)
-        self.prores_frame.grid(row=12, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
-        self.prores_frame.grid_remove()  # Initially hidden
+        # --- Output & Codec Settings Frame ---
+        output_codec_settings_frame = ttk.LabelFrame(self.root, text="Output & Codec Settings")
+        output_codec_settings_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=10) # Increased padding
+        output_codec_settings_frame.grid_columnconfigure(1, weight=1) # Allow entry fields to expand
 
-        # Initialize codec-specific variables
-        self.prores_profile = tk.StringVar()
-        self.prores_qscale = tk.StringVar()
-        self.mp4_bitrate = tk.StringVar()
-        self.mp4_crf = tk.StringVar()
+        current_row_output = 0
+        self.frame_rate_var, self.frame_rate_entry = self._create_labeled_entry(
+            output_codec_settings_frame, "Output Frame Rate (fps):", row=current_row_output,
+            default_value=self.settings.get("frame_rate", "60"),
+            bind_event="<KeyRelease>", bind_callback=self.update_duration,
+            columnspan_entry=2
+        )
+        self.frame_rate = self.frame_rate_entry # Compatibility
+        current_row_output += 1
 
-        # Populate h264/h265 settings
-        ttk.Label(self.h264_h265_frame, text="Bitrate (Mbps):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.bitrate_entry = ttk.Entry(self.h264_h265_frame, textvariable=self.mp4_bitrate, width=10)
-        self.bitrate_entry.insert(0, "30")
-        self.bitrate_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        self.desired_duration_var, self.desired_duration_entry = self._create_labeled_entry(
+            output_codec_settings_frame, "Desired Duration (seconds):", row=current_row_output,
+            default_value=self.settings.get("desired_duration", "15"),
+            bind_event="<KeyRelease>", bind_callback=self.update_duration,
+            columnspan_entry=2
+        )
+        self.desired_duration = self.desired_duration_entry # Compatibility
+        current_row_output += 1
 
-        ttk.Label(self.h264_h265_frame, text="CRF:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.crf_entry = ttk.Entry(self.h264_h265_frame, textvariable=self.mp4_crf, width=10)
-        self.crf_entry.insert(0, "23")
-        self.crf_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        self.output_filename_var, self.output_filename_entry = self._create_labeled_entry(
+            output_codec_settings_frame, "Output Filename:", row=current_row_output,
+            default_value="output.mp4",
+            columnspan_entry=2
+        )
+        self.output_filename = self.output_filename_entry # Compatibility
+        current_row_output += 1
 
-        # Populate ProRes settings
-        ttk.Label(self.prores_frame, text="ProRes Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.prores_profile_label = ttk.Label(self.prores_frame, text="422")
+        self.output_folder_var, self.output_folder_entry, _ = self._create_labeled_entry(
+            output_codec_settings_frame, "Output Folder:", row=current_row_output,
+            default_value=self.settings.get("last_output_folder", ""),
+            browse_command=self.browse_output_folder,
+            columnspan_entry=1
+        )
+        self.output_folder = self.output_folder_entry # Compatibility
+        current_row_output += 1
+
+        self.codec_var, self.codec_dropdown = self._create_labeled_combobox(
+            output_codec_settings_frame, "Codec:", row=current_row_output,
+            default_value=self.settings.get("codec", "h265"),
+            values=["h264", "h265", "prores_422", "prores_422_lt", "prores_444", "qtrle"],
+            state="readonly", bind_event="<<ComboboxSelected>>", bind_callback=self.update_codec,
+            columnspan_combo=2
+        )
+        current_row_output += 1
+
+        self.audio_option_var, self.audio_option_dropdown = self._create_labeled_combobox(
+            output_codec_settings_frame, "Audio Options:", row=current_row_output,
+            default_value="No Audio", values=["No Audio", "Blank Audio Track"], state="readonly",
+            columnspan_combo=2
+        )
+        current_row_output += 1
+        
+        # Initialize codec-specific variables (must be done before creating frames that use them)
+        self.prores_profile = tk.StringVar(value=self.settings.get("prores_profile", DEFAULT_SETTINGS["prores_profile"]))
+        self.prores_qscale = tk.StringVar(value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
+        self.mp4_bitrate = tk.StringVar(value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]))
+        self.mp4_crf = tk.StringVar(value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]))
+
+        # Codec-specific options frames (parent is output_codec_settings_frame)
+        # H.264/H.265 Frame
+        self.h264_h265_frame = ttk.Frame(output_codec_settings_frame)
+        self.h264_h265_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+        self.h264_h265_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
+        
+        _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
+        _, self.crf_entry = self._create_labeled_entry(self.h264_h265_frame, "CRF:", row=1, entry_var=self.mp4_crf, default_value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
+        
+        # ProRes Frame
+        self.prores_frame = ttk.Frame(output_codec_settings_frame)
+        # Grid it on the same row as h264_h265_frame; update_codec will manage visibility
+        self.prores_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5) 
+        self.prores_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
+
+        # ProRes Profile Label (not an entry, just text updated by update_codec)
+        ttk.Label(self.prores_frame, text="ProRes Profile:", font=self.custom_font).grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        self.prores_profile_label = ttk.Label(self.prores_frame, text="", font=self.custom_font) # Text set by update_codec
         self.prores_profile_label.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        
+        _, self.qscale_entry = self._create_labeled_entry(self.prores_frame, "Quality (qscale:v):", row=1, entry_var=self.prores_qscale, default_value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]), entry_width=10)
+        
+        self.prores_frame.grid_remove() # Initially hidden by default
+        # current_row_output += 1 # This row is shared by codec-specific frames
 
-        ttk.Label(self.prores_frame, text="Quality (qscale:v):").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.qscale_entry = ttk.Entry(self.prores_frame, textvariable=self.prores_qscale, width=10)
-        self.qscale_entry.insert(0, "9")
-        self.qscale_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        # --- Process & Log Frame ---
+        process_log_frame = ttk.LabelFrame(self.root, text="Process & Log")
+        process_log_frame.grid(row=2, column=0, sticky="nsew", padx=15, pady=(10,15)) # Increased padding
+        # Configure grid for process_log_frame
+        process_log_frame.grid_columnconfigure(0, weight=1) # Make the first column (where button and progress bar are) expand
+        process_log_frame.grid_rowconfigure(4, weight=1)    # Make the text area row (now row 4) expand
 
-        # Progress Bar
+        self.run_button = ttk.Button(process_log_frame, text="Run FFmpeg", command=self.run_ffmpeg)
+        # To center the button, we can make it span one column and rely on the parent's column configure
+        self.run_button.grid(row=0, column=0, pady=(10,5)) 
+
         self.progress_var = tk.DoubleVar()
-        self.progress_bar = ttk.Progressbar(root, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.grid(row=13, column=0, columnspan=3, sticky='ew', padx=10, pady=(20,5))
+        self.progress_bar = ttk.Progressbar(process_log_frame, variable=self.progress_var, maximum=100, mode='determinate')
+        self.progress_bar.grid(row=1, column=0, sticky='ew', padx=5, pady=5)
 
-        # Status Label
-        self.status_label = ttk.Label(root, text="", font=self.custom_font)
-        self.status_label.grid(row=14, column=0, columnspan=3, padx=10, pady=(5,20))
+        self.status_label = ttk.Label(process_log_frame, text="", font=self.custom_font)
+        self.status_label.grid(row=2, column=0, padx=5, pady=(5,0), sticky='ew')
 
-        # FFmpeg Output Text Widget
-        self.output_text = tk.Text(root, height=10, width=80, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff')
-        self.output_text.grid(row=15, column=0, columnspan=3, padx=10, pady=10, sticky='nsew')
-        self.output_scrollbar = ttk.Scrollbar(root, orient='vertical', command=self.output_text.yview)
-        self.output_scrollbar.grid(row=15, column=3, sticky='ns')
+        # "Open Output Folder" button - created here, gridded by process_queue
+        self.open_output_folder_button = ttk.Button(process_log_frame, text="Open Output Folder", command=self._open_last_output_folder)
+
+        # Text area and scrollbar
+        text_area_frame = ttk.Frame(process_log_frame) # Use a frame to hold text and scrollbar
+        text_area_frame.grid(row=4, column=0, sticky='nsew', padx=5, pady=5) # Moved to row 4
+        text_area_frame.grid_rowconfigure(0, weight=1)
+        text_area_frame.grid_columnconfigure(0, weight=1)
+
+        self.output_text = tk.Text(text_area_frame, height=10, wrap=tk.WORD, bg='#1e1e1e', fg='#ffffff', font=self.custom_font)
+        self.output_text.grid(row=0, column=0, sticky='nsew')
+        self.output_scrollbar = ttk.Scrollbar(text_area_frame, orient='vertical', command=self.output_text.yview)
+        self.output_scrollbar.grid(row=0, column=1, sticky='ns')
         self.output_text['yscrollcommand'] = self.output_scrollbar.set
-
-        # Configure the new row to expand
-        root.grid_rowconfigure(15, weight=1)
-
-        # Initialize codec-specific UI based on default selection
-        self.update_codec()
-
-        # Start the queue processing loop
+        
+        # Style for Scrollbar
+        self.style.configure("Vertical.TScrollbar", 
+                             background='#4a4a4a', 
+                             troughcolor='#2b2b2b', 
+                             bordercolor='#3c3f41', 
+                             arrowcolor='#ffffff',
+                             relief='flat')
+        self.style.map("Vertical.TScrollbar",
+                       background=[('active', '#5c5c5c')])
+        
+        # Initialize UI states
+        self.update_codec() 
         self.root.after(100, self.process_queue)
 
+        # Load window icon if available
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(script_dir, "ffmpeg_ui_icon.png")
+        if os.path.exists(icon_path):
+            try:
+                self._icon_img = tk.PhotoImage(file=icon_path)
+                self.root.iconphoto(False, self._icon_img)
+            except Exception as e:
+                print(f"Could not load window icon: {e}")
+
+    def _create_labeled_entry(self, parent, label_text, row, col_offset=0, default_value="", browse_command=None, entry_var=None, bind_event=None, bind_callback=None, columnspan_entry=1, columnspan_label=1, sticky_label="w", sticky_entry="ew", padx_label=(10,5), pady_label=(8,8), padx_entry=(5,10), pady_entry=(8,8), padx_browse=(5,10), pady_browse=(8,8), entry_width=None):
+        label = ttk.Label(parent, text=label_text, font=self.custom_font)
+        label.grid(row=row, column=col_offset, columnspan=columnspan_label, sticky=sticky_label, padx=padx_label, pady=pady_label)
+
+        if entry_var is None:
+            entry_var = tk.StringVar()
+        
+        entry_options = {'textvariable': entry_var}
+        if entry_width is not None:
+            entry_options['width'] = entry_width
+            
+        entry = ttk.Entry(parent, **entry_options)
+        # The entry always starts at col_offset + columnspan_label
+        entry.grid(row=row, column=col_offset + columnspan_label, columnspan=columnspan_entry, sticky=sticky_entry, padx=padx_entry, pady=pady_entry)
+        
+        if default_value:
+            entry.insert(0, str(default_value)) # Ensure default is string
+        
+        if bind_event and bind_callback:
+            entry.bind(bind_event, bind_callback)
+
+        if browse_command:
+            browse_button = ttk.Button(parent, text="Browse", command=browse_command)
+            # Browse button is placed after the entry, considering its span
+            browse_button.grid(row=row, column=col_offset + columnspan_label + columnspan_entry, padx=padx_browse, pady=pady_browse, sticky="e")
+            return entry_var, entry, browse_button 
+        return entry_var, entry
+
+    def _create_labeled_combobox(self, parent, label_text, row, col_offset=0, combo_var=None, values=None, state="readonly", bind_event=None, bind_callback=None, columnspan_combo=1, columnspan_label=1, sticky_label="w", sticky_combo="ew", width=None, default_value=None, padx_label=(10,5), pady_label=(8,8), padx_combo=(5,10), pady_combo=(8,8)):
+        label = ttk.Label(parent, text=label_text, font=self.custom_font)
+        label.grid(row=row, column=col_offset, columnspan=columnspan_label, sticky=sticky_label, padx=padx_label, pady=pady_label)
+
+        if combo_var is None:
+            combo_var = tk.StringVar()
+        
+        if default_value:
+            combo_var.set(str(default_value)) # Ensure default is string
+
+        combo_options = {'textvariable': combo_var, 'state': state}
+        if width is not None:
+            combo_options['width'] = width
+        if values:
+            combo_options['values'] = values
+
+        combobox = ttk.Combobox(parent, **combo_options)
+        combobox.grid(row=row, column=col_offset + columnspan_label, columnspan=columnspan_combo, sticky=sticky_combo, padx=padx_combo, pady=pady_combo)
+        
+        if bind_event and bind_callback:
+            combobox.bind(bind_event, bind_callback)
+            
+        return combo_var, combobox
+
     def browse_img_seq(self):
-        current_dir = self.img_seq_folder.get()
+        current_dir = self.img_seq_folder_var.get() # Use the var from helper
         if not current_dir or not os.path.isdir(current_dir):
             initial_dir = self.settings["last_input_folder"]
         else:
@@ -361,8 +533,7 @@ class FFmpegUI:
 
         folder = filedialog.askdirectory(initialdir=initial_dir)
         if folder:
-            self.img_seq_folder.delete(0, tk.END)
-            self.img_seq_folder.insert(0, folder)
+            self.img_seq_folder_var.set(folder)
             self.update_filename_pattern(folder)
             self.save_settings()  # Save settings after updating input folder
             self.update_output_folder(folder)
@@ -450,8 +621,7 @@ class FFmpegUI:
                                 collection = dialog.collections[selected_idx]
                                 # Update the UI with selected sequence
                                 pattern = f"{collection.head}%04d{collection.tail}"  # Force 4-digit padding
-                                self.filename_pattern.delete(0, tk.END)
-                                self.filename_pattern.insert(0, pattern)
+                                self.filename_pattern_var.set(pattern) # Use the var
                                 
                                 self.frame_range = (min(collection.indexes), max(collection.indexes))
                                 self.total_frames = len(collection.indexes)
@@ -467,8 +637,7 @@ class FFmpegUI:
                                 
                                 # Update output filename
                                 output_name = collection.head.rstrip('_.')
-                                self.output_filename.delete(0, tk.END)
-                                self.output_filename.insert(0, output_name)
+                                self.output_filename_var.set(output_name) # Use the var
                                 
                                 # Update duration
                                 self.update_duration()
@@ -495,8 +664,7 @@ class FFmpegUI:
                         # Single sequence found - use existing logic
                         collection = all_collections[0]
                         pattern = f"{collection.head}%04d{collection.tail}"
-                        self.filename_pattern.delete(0, tk.END)
-                        self.filename_pattern.insert(0, pattern)
+                        self.filename_pattern_var.set(pattern) # Use the var
                         
                         # Show/hide ACES frame based on file type
                         if pattern.lower().endswith('.exr'):
@@ -512,31 +680,27 @@ class FFmpegUI:
                         
                         # Update output filename
                         output_name = collection.head.rstrip('_.')
-                        self.output_filename.delete(0, tk.END)
-                        self.output_filename.insert(0, output_name)
+                        self.output_filename_var.set(output_name) # Use the var
                         
                         # Update duration
                         self.update_duration()
                 else:
                     messagebox.showwarning("Warning", "No image sequence found in the selected folder.")
                     self.total_frames = 0
-                    self.desired_duration.delete(0, tk.END)
-                    self.desired_duration.insert(0, "0")
+                    self.desired_duration_var.set("0") # Use the var
             else:
                 messagebox.showwarning("Warning", "No image files found in the selected folder.")
                 self.total_frames = 0
-                self.desired_duration.delete(0, tk.END)
-                self.desired_duration.insert(0, "0")
+                self.desired_duration_var.set("0") # Use the var
         except Exception as e:
             messagebox.showerror("Error", f"Failed to update filename pattern: {e}")
             self.total_frames = 0
-            self.desired_duration.delete(0, tk.END)
-            self.desired_duration.insert(0, "0")
+            self.desired_duration_var.set("0") # Use the var
 
     def update_output_folder(self, input_folder):
         """Update output folder with option to use parent directory of input folder"""
         output_folder = os.path.dirname(input_folder)
-        current_output = self.output_folder.get()
+        current_output = self.output_folder_var.get() # Use the var
         
         # If there's no current output folder set, or it's different from the suggested one
         if not current_output or current_output != output_folder:
@@ -545,8 +709,7 @@ class FFmpegUI:
                 f"Would you like to set the output folder to:\n{output_folder}?"
             )
             if response:
-                self.output_folder.delete(0, tk.END)
-                self.output_folder.insert(0, output_folder)
+                self.output_folder_var.set(output_folder) # Use the var
                 self.save_settings()  # Save settings after updating output folder
 
     def load_settings(self):
@@ -565,12 +728,12 @@ class FFmpegUI:
     def save_settings(self):
         """Save current settings to JSON file"""
         settings = {
-            "last_input_folder": self.img_seq_folder.get(),
-            "last_output_folder": self.output_folder.get(),
-            "frame_rate": self.frame_rate.get(),
-            "source_frame_rate": self.source_frame_rate.get(),  # Added source frame rate
-            "desired_duration": self.desired_duration.get(),
-            "codec": self.codec_var.get(),
+            "last_input_folder": self.img_seq_folder_var.get(), # Use var
+            "last_output_folder": self.output_folder_var.get(), # Use var
+            "frame_rate": self.frame_rate_var.get(), # Use var
+            "source_frame_rate": self.source_frame_rate_var.get(), # Use var
+            "desired_duration": self.desired_duration_var.get(), # Use var
+            "codec": self.codec_var.get(), # Already a var
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else DEFAULT_SETTINGS["mp4_bitrate"],
             "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else DEFAULT_SETTINGS["mp4_crf"],
             "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else DEFAULT_SETTINGS["prores_profile"],
@@ -584,11 +747,10 @@ class FFmpegUI:
             print(f"Error saving settings: {e}")
 
     def browse_output_folder(self):
-        initial_dir = self.output_folder.get() or self.settings["last_output_folder"]
+        initial_dir = self.output_folder_var.get() or self.settings["last_output_folder"] # Use var
         folder = filedialog.askdirectory(initialdir=initial_dir)
         if folder:
-            self.output_folder.delete(0, tk.END)
-            self.output_folder.insert(0, folder)
+            self.output_folder_var.set(folder) # Use var
             self.save_settings()  # Save settings after updating output folder
 
     def update_codec(self, event=None):
@@ -598,26 +760,29 @@ class FFmpegUI:
         if codec in ["h264", "h265"]:
             self.h264_h265_frame.grid()
             self.prores_frame.grid_remove()
-            # Set MP4 values from settings
-            if hasattr(self, 'mp4_bitrate'):
-                self.mp4_bitrate.set(self.settings["mp4_bitrate"])
-            if hasattr(self, 'mp4_crf'):
-                self.mp4_crf.set(self.settings["mp4_crf"])
+            # Set MP4 values from settings or StringVars
+            if hasattr(self, 'mp4_bitrate') and self.mp4_bitrate: # Check if StringVar exists
+                self.mp4_bitrate.set(self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]))
+            if hasattr(self, 'mp4_crf') and self.mp4_crf:
+                self.mp4_crf.set(self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]))
         elif codec.startswith("prores"):
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid()
             # Set ProRes profile based on selection
+            profile_text = ""
             if codec == "prores_422":
                 self.prores_profile.set("2")  # Standard 422
-                self.prores_profile_label.config(text="422")
+                profile_text = "422"
             elif codec == "prores_422_lt":
                 self.prores_profile.set("1")  # 422 LT
-                self.prores_profile_label.config(text="422 LT")
+                profile_text = "422 LT"
             elif codec == "prores_444":
                 self.prores_profile.set("4")  # 4444
-                self.prores_profile_label.config(text="4444")
-            # Set default ProRes Qscale
-            self.prores_qscale.set("9")
+                profile_text = "4444"
+            self.prores_profile_label.config(text=profile_text)
+            # Set default ProRes Qscale from settings or StringVar
+            if hasattr(self, 'prores_qscale') and self.prores_qscale:
+                 self.prores_qscale.set(self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
         elif codec == "qtrle":
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid_remove()
@@ -628,10 +793,11 @@ class FFmpegUI:
             ]
         else:
             # Set ProRes values from settings
-            if hasattr(self, 'prores_qscale'):
-                self.prores_qscale.set(self.settings["prores_qscale"])
-            if hasattr(self, 'prores_profile'):
-                self.prores_profile.set(self.settings["prores_profile"])
+            if hasattr(self, 'prores_qscale') and self.prores_qscale:
+                self.prores_qscale.set(self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
+            if hasattr(self, 'prores_profile') and self.prores_profile: # This var holds the number, not text
+                # We don't set prores_profile_label here as it depends on the specific prores type
+                pass # self.prores_profile.set(self.settings.get("prores_profile", DEFAULT_SETTINGS["prores_profile"]))
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid_remove()
 
@@ -642,9 +808,9 @@ class FFmpegUI:
         # This method now calculates the scale factor based on desired duration and frame rate
         if hasattr(self, 'total_frames') and self.total_frames > 0:
             try:
-                source_frame_rate = float(self.source_frame_rate.get())
-                output_frame_rate = float(self.frame_rate.get())
-                desired_duration = float(self.desired_duration.get())
+                source_frame_rate = float(self.source_frame_rate_var.get()) # Use var
+                output_frame_rate = float(self.frame_rate_var.get()) # Use var
+                desired_duration = float(self.desired_duration_var.get()) # Use var
                 
                 if source_frame_rate <= 0 or output_frame_rate <= 0 or desired_duration <= 0:
                     raise ValueError
@@ -671,55 +837,63 @@ class FFmpegUI:
         print("Debug: run_ffmpeg function called")
 
         # For now, we'll force image sequence mode since video file handling isn't fully implemented
-        input_type = "Image Sequence"
-        output_dir = self.output_folder.get().strip()
-        output_file = self.output_filename.get().strip()
-        codec = self.codec_var.get()
+        input_type = "Image Sequence" # self.input_type_var.get()
+        img_folder = self.img_seq_folder_var.get() # Current value in the UI field
+        output_dir = self.output_folder_var.get().strip() # Use var
+        output_file = self.output_filename_var.get().strip() # Use var
+        codec = self.codec_var.get() # Already a var
+        pattern = self.filename_pattern_var.get() # Use var
+        is_exr_pattern = pattern.lower().endswith('.exr') # Based on the current pattern in UI
 
-        print(f"=== Starting run_ffmpeg ===")
-        print("Initial values:")
-        print(f"- Input type: {input_type}")
-        print(f"- Output dir: {output_dir}")
-        print(f"- Output file: {output_file}")
-        print(f"- Codec: {codec}")
+        # Initial debug prints for run_ffmpeg call
+        print(f"=== Starting run_ffmpeg ({'EXR pattern' if is_exr_pattern else 'Non-EXR pattern'}) ===")
+        print(f"  Input folder from UI: {img_folder}")
+        print(f"  Pattern from UI: {pattern}")
+        if hasattr(self, 'original_exr_path'):
+            print(f"  Current self.original_exr_path: {self.original_exr_path}")
+        if hasattr(self, 'temp_dir'):
+            print(f"  Current self.temp_dir: {self.temp_dir}")
+
+        # Check if this call is for processing temporary PNGs from a previous EXR conversion
+        is_processing_temp_pngs_from_exr = (hasattr(self, 'temp_dir') and self.temp_dir and \
+                                           hasattr(self, 'original_exr_path') and self.original_exr_path and \
+                                           img_folder == self.temp_dir and not is_exr_pattern)
+        
+        print(f"  Is processing temp PNGs from EXR stage: {is_processing_temp_pngs_from_exr}")
 
         # Check input directory
-        img_folder = self.img_seq_folder.get()
-        print(f"\nChecking input folder: {img_folder}")
+        print(f"  Checking input folder: {img_folder}")
         if not os.path.exists(img_folder):
-            print("Error: Input folder does not exist")
+            print("  Error: Input folder does not exist")
             messagebox.showerror("Error", f"Input folder does not exist: {img_folder}")
             return
 
-        # Get filename pattern from UI
-        pattern = self.filename_pattern.get()
-        is_exr = pattern.lower().endswith('.exr')
+        # Get filename pattern from UI (already done)
+        # is_exr = pattern.lower().endswith('.exr') # Redundant, use is_exr_pattern
 
-        # Check if frame_range exists before continuing
+        # Check if frame_range exists before continuing (relevant for both EXR first pass and direct sequence)
         if not hasattr(self, 'frame_range'):
             messagebox.showerror("Error", "No image sequence detected. Please select an image sequence folder first.")
             return
             
-        # If input is EXR, run conversion in a separate thread
-        if is_exr:
+        # If input is EXR (and not the temp PNG stage), run conversion in a separate thread
+        if is_exr_pattern and not is_processing_temp_pngs_from_exr:
+            print("  Debug: EXR sequence (first pass). Storing original path and starting EXR conversion.")
+            self.original_exr_path = img_folder # Store the original EXR path from UI
+            
             # Ensure pattern includes '%04d'
-            if "%04d" in pattern:
-                before, after = pattern.split("%04d", 1)
-            else:
+            if "%04d" not in pattern:
                 messagebox.showerror("Error", "Filename pattern must contain '%04d' for image sequence.")
                 return
 
             # start_frame and end_frame are expected to have been set during sequence detection
-            if not hasattr(self, 'frame_range'):
-                messagebox.showerror("Error", "Frame range not detected. Please select the image sequence folder again.")
-                return
             start_frame, end_frame = self.frame_range
             
             # Store all parameters for second stage processing
             self.exr_conversion_params = {
-                'output_framerate': float(self.frame_rate.get()),
-                'source_framerate': float(self.source_frame_rate.get()),
-                'desired_duration': float(self.desired_duration.get()),
+                'output_framerate': float(self.frame_rate_var.get()), # Use var
+                'source_framerate': float(self.source_frame_rate_var.get()), # Use var
+                'desired_duration': float(self.desired_duration_var.get()), # Use var
                 'codec': codec,
                 'output_dir': output_dir,
                 'output_file': output_file
@@ -740,10 +914,22 @@ class FFmpegUI:
             # Launch the conversion in a separate thread so that the UI isn't blocked.
             conversion_thread = threading.Thread(
                 target=self.convert_exr_files,
-                args=(img_folder, pattern, start_frame, end_frame, before)
+                args=(img_folder, pattern, start_frame, end_frame, pattern.split("%04d", 1)[0])
             )
             conversion_thread.start()
             return  # Return immediately so that the UI remains responsive
+        
+        elif not is_exr_pattern and not is_processing_temp_pngs_from_exr:
+            # This is a direct non-EXR sequence (e.g., PNG, JPG directly selected by user)
+            # and not the second pass of an EXR job.
+            print("  Debug: Direct non-EXR sequence (user selected PNG/JPG etc.). Clearing original_exr_path.")
+            self.original_exr_path = None
+        
+        # If we reach here, it's either:
+        # a) A direct non-EXR sequence (self.original_exr_path is None).
+        # b) The second pass of an EXR->PNG conversion (self.original_exr_path holds original EXR path, img_folder is temp_dir).
+        print(f"  Debug: Proceeding to FFmpeg video encoding. Current self.original_exr_path = {self.original_exr_path}")
+
 
         # Validate output directory
         if not output_dir:
@@ -764,10 +950,13 @@ class FFmpegUI:
             return
 
         # Get and validate output filename
-        output_file = self.output_filename.get().strip()
+        output_file = self.output_filename_var.get().strip() # Use var
         if not output_file:
             messagebox.showerror("Error", "Please enter an output filename")
             return
+
+        # Hide the "Open Output Folder" button at the start of a new process
+        self.queue.put(('hide_open_folder_button', None))
 
         # Construct full output path
         output_path = os.path.join(output_dir, output_file)
@@ -797,9 +986,9 @@ class FFmpegUI:
         self.queue.put(('output', f"First frame path: {test_file}\n"))
 
         try:
-            source_framerate = float(self.source_frame_rate.get())
-            output_framerate = float(self.frame_rate.get())
-            desired_duration = float(self.desired_duration.get())
+            source_framerate = float(self.source_frame_rate_var.get()) # Use var
+            output_framerate = float(self.frame_rate_var.get()) # Use var
+            desired_duration = float(self.desired_duration_var.get()) # Use var
             
             if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
@@ -819,8 +1008,8 @@ class FFmpegUI:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
 
-        output_file = self.output_filename.get().strip()
-        output_dir = self.output_folder.get()
+        output_file = self.output_filename_var.get().strip() # Use var
+        output_dir = self.output_folder_var.get() # Use var
 
         if not all([img_folder, pattern, output_framerate, output_file, output_dir]):
             self.queue.put(('error', "Please fill in all fields."))
@@ -840,7 +1029,7 @@ class FFmpegUI:
             start_frame, end_frame = self.frame_range
             input_pattern = pattern  # Use the updated pattern
             input_path = os.path.join(img_folder, input_pattern)
-            input_args = [
+            image_sequence_input_args = [
                 "-start_number", str(start_frame),
                 "-framerate", str(source_framerate),  # Use source frame rate for input
                 "-i", input_path
@@ -851,8 +1040,8 @@ class FFmpegUI:
 
         output_path = os.path.join(output_dir, output_file)
 
-        # Determine the codec parameters
-        codec_params = []
+        # Determine the codec parameters for video
+        video_codec_params = []
         if codec in ["h264", "h265"]:
             bitrate = self.mp4_bitrate.get()
             crf = self.mp4_crf.get()
@@ -861,7 +1050,7 @@ class FFmpegUI:
                 return
             
             codec_lib = "libx264" if codec == "h264" else "libx265"
-            codec_params = [
+            video_codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
                 "-b:v", f"{bitrate}M",
@@ -869,9 +1058,9 @@ class FFmpegUI:
                 "-bufsize", f"{int(float(bitrate)*2)}M"
             ]
             if codec == "h264":
-                codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
+                video_codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
             else:
-                codec_params.extend(["-tag:v", "hvc1"])
+                video_codec_params.extend(["-tag:v", "hvc1"])
         elif codec.startswith("prores"):
             profile = self.prores_profile.get()
             qscale = self.prores_qscale.get()
@@ -879,47 +1068,82 @@ class FFmpegUI:
                 self.queue.put(('error', "ProRes profile and Quality settings are required for ProRes encoding."))
                 return
             
-            codec_params = [
+            video_codec_params = [
                 "-c:v", "prores_ks",
                 "-profile:v", profile,
                 "-qscale:v", qscale
             ]
         elif codec == "qtrle":
-            codec_params = [
+            video_codec_params = [
                 "-c:v", "qtrle",
-                "-pix_fmt", "rgb24"
+                # "-pix_fmt", "rgb24" # This will be handled later by general pix_fmt for output
             ]
         else:
             self.queue.put(('error', "Unsupported codec selected."))
             return
 
-        # Use a single setpts filter with the calculated scale factor
+        # Video filters
         setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
-        ffmpeg_filter_args = ["-vf", ffmpeg_filters]
+        # Scale filter for color matrix should ideally be more context-aware based on input if not bt709
+        ffmpeg_filters_str = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+        video_filter_args = ["-vf", ffmpeg_filters_str]
+        
         frames_arg = ["-frames:v", str(total_frames_needed)]
-        color_space_args = [
+        
+        output_color_space_args = [
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
             "-colorspace", "bt709"
         ]
 
-        # Construct the ffmpeg command
-        cmd = [
-            "ffmpeg",
-            "-accurate_seek",
-            "-ss", "0",
-            "-t", f"{desired_duration:.6f}"
-        ] + input_args + [
-            "-r", str(output_framerate),  # Use output frame rate for output
-            "-vsync", "cfr"
-        ] + ffmpeg_filter_args + frames_arg + [
-            "-pix_fmt", "yuv420p",
-            "-video_track_timescale", "30000",
-            "-an"
-        ] + codec_params + color_space_args + [
-            output_path
+        # --- Construct the ffmpeg command --- 
+        cmd = ["ffmpeg", "-accurate_seek"] # Base command and global options
+
+        # --- INPUTS ---
+        # Image sequence input (with -ss 0 for fast seeking at start of this input)
+        cmd += ["-ss", "0"] + image_sequence_input_args
+
+        # Audio input (if blank audio selected)
+        audio_option = self.audio_option_var.get()
+        blank_audio_input_args = []
+        output_audio_handling_args = [] # For -an or audio codec settings
+
+        if audio_option == "Blank Audio Track":
+            blank_audio_input_args = [
+                "-f", "lavfi",
+                "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+                "-shortest"  # Ensures this silent audio input matches duration of other inputs
+            ]
+            # Explicitly set audio codec and bitrate for the blank track
+            output_audio_handling_args.extend(["-c:a", "aac", "-b:a", "128k"])
+        elif audio_option == "No Audio":
+            output_audio_handling_args = ["-an"] # Output option to disable audio
+
+        cmd += blank_audio_input_args # Add blank audio input args if any
+
+        # --- OUTPUTS, FILTERS, CODECS ---
+        cmd += [
+            "-t", f"{desired_duration:.6f}",   # Output duration
+            "-r", str(output_framerate),       # Output frame rate
+            "-fps_mode", "cfr",                # Replaces deprecated -vsync cfr for constant frame rate
         ]
+        
+        cmd += video_filter_args # Video filters (-vf)
+
+        # Pixel format and video track timescale
+        # For qtrle (Animation codec), rgb24 is often used. For others, yuv420p is common for compatibility.
+        output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
+        cmd += [
+            "-pix_fmt", output_pix_fmt,
+            "-video_track_timescale", "30000"
+        ]
+        
+        cmd += output_audio_handling_args # Add -an if no audio, or audio codec settings
+        
+        cmd += video_codec_params         # Video codec settings from UI
+        cmd += output_color_space_args     # Output video color space settings
+
+        cmd += [output_path]                # Output file path
 
         print("FFmpeg command:", " ".join(cmd))
 
@@ -1016,7 +1240,13 @@ class FFmpegUI:
             else:
                 success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
                 self.queue.put(('success', success_message))
-            
+                self.queue.put(('show_open_folder_button', os.path.dirname(output_path))) # Send output directory
+
+                # If original_exr_path is set, it means we converted EXRs and should restore the path
+                if hasattr(self, 'original_exr_path') and self.original_exr_path:
+                    self.queue.put(('restore_path', self.original_exr_path))
+                    self.original_exr_path = None # Clear it after use
+
         except Exception as e:
             self.queue.put(('error', f"Unexpected error: {str(e)}"))
 
@@ -1040,6 +1270,20 @@ class FFmpegUI:
                 elif msg_type == 'prepare_ffmpeg':
                     # Handle FFmpeg preparation on main thread
                     self.prepare_ffmpeg_conversion(content)
+                elif msg_type == 'restore_path':
+                    self.img_seq_folder.delete(0, tk.END)
+                    self.img_seq_folder.insert(0, content)
+                    # Also update the var if using helpers that rely on it
+                    if hasattr(self, 'img_seq_folder_var'):
+                        self.img_seq_folder_var.set(content)
+                    self.output_text.insert(tk.END, f"INFO: Input path restored to: {content}\n")
+                    self.output_text.see(tk.END)
+                elif msg_type == 'show_open_folder_button':
+                    self.last_successful_output_dir = content
+                    self.open_output_folder_button.grid(row=3, column=0, pady=(5,10)) # Grid below status_label
+                elif msg_type == 'hide_open_folder_button':
+                    self.open_output_folder_button.grid_remove()
+                    self.last_successful_output_dir = None
         except queue.Empty:
             pass
         finally:
@@ -1077,6 +1321,8 @@ class FFmpegUI:
         print("\nDEBUG: convert_exr_files starting")
         self.queue.put(('output', "\nDEBUG: Starting EXR conversion (thread)...\n"))
         
+        # Define OCIO configuration path
+        ocio_config = "/mnt/studio/config/ocio/aces_1.2/config.ocio"
         # First try to create temp directory as a subdirectory of the input folder
         temp_dir_name = f"ffmpeg_tmp_{os.getpid()}"
         
@@ -1202,7 +1448,7 @@ class FFmpegUI:
             cmd = [
                 "oiiotool",
                 "-v",
-                "--colorconfig", "/mnt/studio/config/ocio/aces_1.2/config.ocio",
+                "--colorconfig", ocio_config,
                 "--threads", "1",  # Use single thread per file
                 input_file,
                 "--ch", "R,G,B",
@@ -1373,6 +1619,8 @@ class FFmpegUI:
         # Update input folder with the temporary directory path.
         self.img_seq_folder.delete(0, tk.END)
         self.img_seq_folder.insert(0, self.temp_dir)
+        if hasattr(self, 'img_seq_folder_var'): # Update the associated StringVar
+            self.img_seq_folder_var.set(self.temp_dir)
         
         # Assemble the PNG sequence from the temporary directory.
         png_files = sorted([f for f in os.listdir(self.temp_dir) if f.endswith('.png')])
@@ -1398,6 +1646,8 @@ class FFmpegUI:
             # Update the filename pattern widget.
             self.filename_pattern.delete(0, tk.END)
             self.filename_pattern.insert(0, pattern)
+            if hasattr(self, 'filename_pattern_var'): # Update the associated StringVar
+                self.filename_pattern_var.set(pattern)
             
             # Set the frame range and total frames for FFmpeg.
             self.frame_range = self.temp_frame_range
@@ -1408,12 +1658,15 @@ class FFmpegUI:
                 # Update UI widgets to match stored parameters
                 self.frame_rate.delete(0, tk.END)
                 self.frame_rate.insert(0, str(self.exr_conversion_params['output_framerate']))
+                if hasattr(self, 'frame_rate_var'): self.frame_rate_var.set(str(self.exr_conversion_params['output_framerate']))
                 
                 self.source_frame_rate.delete(0, tk.END)
                 self.source_frame_rate.insert(0, str(self.exr_conversion_params['source_framerate']))
-                
+                if hasattr(self, 'source_frame_rate_var'): self.source_frame_rate_var.set(str(self.exr_conversion_params['source_framerate']))
+
                 self.desired_duration.delete(0, tk.END)
                 self.desired_duration.insert(0, str(self.exr_conversion_params['desired_duration']))
+                if hasattr(self, 'desired_duration_var'): self.desired_duration_var.set(str(self.exr_conversion_params['desired_duration']))
                 
                 # Set the codec dropdown
                 self.codec_var.set(self.exr_conversion_params['codec'])
@@ -1431,9 +1684,11 @@ class FFmpegUI:
                 # Set output file and folder
                 self.output_folder.delete(0, tk.END)
                 self.output_folder.insert(0, self.exr_conversion_params['output_dir'])
+                if hasattr(self, 'output_folder_var'): self.output_folder_var.set(self.exr_conversion_params['output_dir'])
                 
                 self.output_filename.delete(0, tk.END)
                 self.output_filename.insert(0, self.exr_conversion_params['output_file'])
+                if hasattr(self, 'output_filename_var'): self.output_filename_var.set(self.exr_conversion_params['output_file'])
                 
                 # Call update_duration to recalculate scale_factor properly
                 self.update_duration()
@@ -1609,6 +1864,21 @@ class FFmpegUI:
         remaining_stderr = process.stderr.read()
         if remaining_stderr:
             self.queue.put(('output', remaining_stderr))
+
+    def _open_last_output_folder(self):
+        if self.last_successful_output_dir:
+            try:
+                if sys.platform == "win32":
+                    os.startfile(self.last_successful_output_dir)
+                elif sys.platform == "darwin": # macOS
+                    subprocess.Popen(["open", self.last_successful_output_dir])
+                else: # Linux and other UNIX-like systems
+                    subprocess.Popen(["xdg-open", self.last_successful_output_dir])
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to open output folder: {e}")
+                print(f"Failed to open output folder: {e}")
+        else:
+            messagebox.showinfo("Info", "No output folder available. Please run a successful conversion first.")
 
 if __name__ == "__main__":
     check_and_install_dependencies()
