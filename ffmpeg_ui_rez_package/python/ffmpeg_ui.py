@@ -855,18 +855,20 @@ class FFmpegUI:
         codec_params = []
         if codec in ["h264", "h265"]:
             bitrate = self.mp4_bitrate.get()
-            crf = self.mp4_crf.get()
-            if not bitrate or not crf:
-                self.queue.put(('error', "Bitrate and CRF settings are required for H.264/H.265 encoding."))
+            if not bitrate:
+                self.queue.put(('error', "Bitrate setting is required for constant-bitrate H.264/H.265 encoding."))
                 return
             
             codec_lib = "libx264" if codec == "h264" else "libx265"
+            cb = f"{float(bitrate):.0f}M"
             codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
-                "-b:v", f"{bitrate}M",
-                "-maxrate", f"{int(float(bitrate)*2)}M",
-                "-bufsize", f"{int(float(bitrate)*2)}M"
+                "-b:v", cb,
+                "-minrate", cb,
+                "-maxrate", cb,
+                "-bufsize", cb,
+                "-x264-params", "nal-hrd=cbr"
             ]
             if codec == "h264":
                 codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])

@@ -388,8 +388,6 @@ class FFmpegUI:
         self.prores_profile = tk.StringVar(value=self.settings.get("prores_profile", DEFAULT_SETTINGS["prores_profile"]))
         self.prores_qscale = tk.StringVar(value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
         self.mp4_bitrate = tk.StringVar(value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]))
-        self.mp4_crf = tk.StringVar(value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]))
-
         # Codec-specific options frames (parent is output_codec_settings_frame)
         # H.264/H.265 Frame
         self.h264_h265_frame = ttk.Frame(output_codec_settings_frame)
@@ -397,7 +395,6 @@ class FFmpegUI:
         self.h264_h265_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
         
         _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
-        _, self.crf_entry = self._create_labeled_entry(self.h264_h265_frame, "CRF:", row=1, entry_var=self.mp4_crf, default_value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
         
         # ProRes Frame
         self.prores_frame = ttk.Frame(output_codec_settings_frame)
@@ -902,8 +899,7 @@ class FFmpegUI:
             # Store codec-specific parameters
             if codec in ["h264", "h265"]:
                 self.exr_conversion_params.update({
-                    'bitrate': self.mp4_bitrate.get(),
-                    'crf': self.mp4_crf.get()
+                    'bitrate': self.mp4_bitrate.get()
                 })
             elif codec.startswith("prores"):
                 self.exr_conversion_params.update({
@@ -1044,18 +1040,20 @@ class FFmpegUI:
         video_codec_params = []
         if codec in ["h264", "h265"]:
             bitrate = self.mp4_bitrate.get()
-            crf = self.mp4_crf.get()
-            if not bitrate or not crf:
-                self.queue.put(('error', "Bitrate and CRF settings are required for H.264/H.265 encoding."))
+            if not bitrate:
+                self.queue.put(('error', "Bitrate setting is required for constant-bitrate H.264/H.265 encoding."))
                 return
-            
+
             codec_lib = "libx264" if codec == "h264" else "libx265"
+            cb = f"{float(bitrate):.0f}M"
             video_codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
-                "-b:v", f"{bitrate}M",
-                "-maxrate", f"{int(float(bitrate)*2)}M",
-                "-bufsize", f"{int(float(bitrate)*2)}M"
+                "-b:v", cb,
+                "-minrate", cb,
+                "-maxrate", cb,
+                "-bufsize", cb,
+                "-x264-params", "nal-hrd=cbr"
             ]
             if codec == "h264":
                 video_codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
@@ -1123,7 +1121,7 @@ class FFmpegUI:
 
         # --- OUTPUTS, FILTERS, CODECS ---
         cmd += [
-            "-t", f"{desired_duration:.6f}",   # Output duration
+            #"-t", f"{desired_duration:.6f}",   # Output duration. Using -frames:v is more accurate for frame rate conversions.
             "-r", str(output_framerate),       # Output frame rate
             "-fps_mode", "cfr",                # Replaces deprecated -vsync cfr for constant frame rate
         ]
@@ -1142,6 +1140,8 @@ class FFmpegUI:
         
         cmd += video_codec_params         # Video codec settings from UI
         cmd += output_color_space_args     # Output video color space settings
+        
+        cmd += frames_arg                  # Add the frames argument here
 
         cmd += [output_path]                # Output file path
 
@@ -1674,9 +1674,8 @@ class FFmpegUI:
                 
                 # Set codec-specific parameters
                 codec = self.exr_conversion_params['codec']
-                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate') and hasattr(self, 'mp4_crf'):
+                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate'):
                     self.mp4_bitrate.set(self.exr_conversion_params['bitrate'])
-                    self.mp4_crf.set(self.exr_conversion_params['crf'])
                 elif codec.startswith("prores") and hasattr(self, 'prores_profile') and hasattr(self, 'prores_qscale'):
                     self.prores_profile.set(self.exr_conversion_params['profile'])
                     self.prores_qscale.set(self.exr_conversion_params['qscale'])
