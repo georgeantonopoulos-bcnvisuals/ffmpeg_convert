@@ -15,6 +15,7 @@ import glob  # Added for globbing converted files
 import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
+import math
 
 # Add at top with other imports
 try:
@@ -816,13 +817,15 @@ class FFmpegUI:
                 original_duration = self.total_frames / source_frame_rate
                 
                 # Calculate the exact number of frames needed for the desired duration at output frame rate
-                total_frames_needed = int(round(output_frame_rate * desired_duration))
+                total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
                 
                 # Calculate the actual duration based on the exact number of frames
                 actual_duration = total_frames_needed / output_frame_rate
                 
-                # Calculate scale factor for timestamp adjustment
-                scale_factor = desired_duration / original_duration
+                # Calculate setpts factor to stretch input timeline to fit desired output frame count
+                output_frame_count = int(math.ceil(output_frame_rate * desired_duration))
+                setpts_factor = output_frame_count / self.total_frames
+                scale_factor = setpts_factor  # Store for use in run_ffmpeg
                 self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
                 print(f"Scale factor updated to: {scale_factor}")  # Debug statement
             except ValueError:
@@ -993,13 +996,15 @@ class FFmpegUI:
             original_duration = self.total_frames / source_framerate
             
             # Calculate the exact number of frames needed for the desired duration at output frame rate
-            total_frames_needed = int(round(output_framerate * desired_duration))
+            total_frames_needed = int(math.ceil(output_framerate * desired_duration))
             
             # Calculate the actual duration based on the exact number of frames
             actual_duration = total_frames_needed / output_framerate
             
-            # Calculate scale factor for timestamp adjustment
-            scale_factor = desired_duration / original_duration
+            # Calculate setpts factor to stretch input timeline to fit desired output frame count
+            output_frame_count = int(math.ceil(output_framerate * desired_duration))
+            setpts_factor = output_frame_count / self.total_frames
+            scale_factor = setpts_factor
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
@@ -1081,9 +1086,9 @@ class FFmpegUI:
             return
 
         # Video filters
+        # Use setpts to stretch timeline + fps for frame rate conversion
         setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        # Scale filter for color matrix should ideally be more context-aware based on input if not bt709
-        ffmpeg_filters_str = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+        ffmpeg_filters_str = f"{setpts_filter},fps={output_framerate},scale=in_color_matrix=bt709:out_color_matrix=bt709"
         video_filter_args = ["-vf", ffmpeg_filters_str]
         
         frames_arg = ["-frames:v", str(total_frames_needed)]
@@ -1120,28 +1125,19 @@ class FFmpegUI:
         cmd += blank_audio_input_args # Add blank audio input args if any
 
         # --- OUTPUTS, FILTERS, CODECS ---
-        cmd += [
-            #"-t", f"{desired_duration:.6f}",   # Output duration. Using -frames:v is more accurate for frame rate conversions.
-            "-r", str(output_framerate),       # Output frame rate
-            "-fps_mode", "cfr",                # Replaces deprecated -vsync cfr for constant frame rate
-        ]
-        
         cmd += video_filter_args # Video filters (-vf)
-
+        cmd += frames_arg       # Exact frame count instead of duration
+        
         # Pixel format and video track timescale
-        # For qtrle (Animation codec), rgb24 is often used. For others, yuv420p is common for compatibility.
         output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
         cmd += [
             "-pix_fmt", output_pix_fmt,
             "-video_track_timescale", "30000"
         ]
-        
         cmd += output_audio_handling_args # Add -an if no audio, or audio codec settings
         
         cmd += video_codec_params         # Video codec settings from UI
         cmd += output_color_space_args     # Output video color space settings
-        
-        cmd += frames_arg                  # Add the frames argument here
 
         cmd += [output_path]                # Output file path
 
@@ -1804,6 +1800,8 @@ class FFmpegUI:
     def on_closing(self):
         """Handle window close button"""
         print("\nDEBUG: Application closing, initiating cleanup...")
+        # Save current settings before cleanup
+        self.save_settings()  # Add this line
         self.cleanup()
         self.root.destroy()
 

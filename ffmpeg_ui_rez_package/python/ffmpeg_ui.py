@@ -15,6 +15,7 @@ import glob  # Added for globbing converted files
 import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
+import math
 
 # Create a custom logger class to duplicate output
 class TeeLogger:
@@ -653,7 +654,7 @@ class FFmpegUI:
                 original_duration = self.total_frames / source_frame_rate
                 
                 # Calculate the exact number of frames needed for the desired duration at output frame rate
-                total_frames_needed = int(round(output_frame_rate * desired_duration))
+                total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
                 
                 # Calculate the actual duration based on the exact number of frames
                 actual_duration = total_frames_needed / output_frame_rate
@@ -910,8 +911,7 @@ class FFmpegUI:
         cmd = [
             "ffmpeg",
             "-accurate_seek",
-            "-ss", "0",
-            "-t", f"{desired_duration:.6f}"
+            "-ss", "0"
         ] + input_args + [
             "-r", str(output_framerate),  # Use output frame rate for output
             "-vsync", "cfr"
