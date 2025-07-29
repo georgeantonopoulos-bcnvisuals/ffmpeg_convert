@@ -1105,11 +1105,12 @@ class FFmpegUI:
         elif audio_option == "No Audio":
             output_audio_handling_args = ["-an"] # Output option to disable audio
 
-        cmd += blank_audio_input_args # Add blank audio input args if any
+        cmd += blank_audio_input_args  # Add blank audio input args if any
 
         # --- OUTPUTS, FILTERS, CODECS ---
-        cmd += video_filter_args # Video filters (-vf)
-        cmd += frames_arg       # Exact frame count instead of duration
+        cmd += ["-r", str(output_framerate), "-vsync", "cfr"]
+        cmd += video_filter_args  # Video filters (-vf)
+        cmd += frames_arg        # Exact frame count instead of duration
         
         # Pixel format and video track timescale
         output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
