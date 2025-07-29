@@ -52,7 +52,6 @@ DEFAULT_SETTINGS = {
     "desired_duration": "15",
     "codec": "h265",
     "mp4_bitrate": "30",
-    "mp4_crf": "23",
     "prores_profile": "2",  # 422
     "prores_qscale": "9"
 }
@@ -733,7 +732,6 @@ class FFmpegUI:
             "desired_duration": self.desired_duration_var.get(), # Use var
             "codec": self.codec_var.get(), # Already a var
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else DEFAULT_SETTINGS["mp4_bitrate"],
-            "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else DEFAULT_SETTINGS["mp4_crf"],
             "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else DEFAULT_SETTINGS["prores_profile"],
             "prores_qscale": self.prores_qscale.get() if hasattr(self, 'prores_qscale') else DEFAULT_SETTINGS["prores_qscale"]
         }
@@ -759,10 +757,8 @@ class FFmpegUI:
             self.h264_h265_frame.grid()
             self.prores_frame.grid_remove()
             # Set MP4 values from settings or StringVars
-            if hasattr(self, 'mp4_bitrate') and self.mp4_bitrate: # Check if StringVar exists
+            if hasattr(self, 'mp4_bitrate') and self.mp4_bitrate:  # Check if StringVar exists
                 self.mp4_bitrate.set(self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]))
-            if hasattr(self, 'mp4_crf') and self.mp4_crf:
-                self.mp4_crf.set(self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]))
         elif codec.startswith("prores"):
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid()
@@ -806,32 +802,26 @@ class FFmpegUI:
         # This method now calculates the scale factor based on desired duration and frame rate
         if hasattr(self, 'total_frames') and self.total_frames > 0:
             try:
-                source_frame_rate = float(self.source_frame_rate_var.get()) # Use var
-                output_frame_rate = float(self.frame_rate_var.get()) # Use var
-                desired_duration = float(self.desired_duration_var.get()) # Use var
-                
+                source_frame_rate = float(self.source_frame_rate_var.get())
+                output_frame_rate = float(self.frame_rate_var.get())
+                desired_duration = float(self.desired_duration_var.get())
+
                 if source_frame_rate <= 0 or output_frame_rate <= 0 or desired_duration <= 0:
                     raise ValueError
-                    
-                # Original duration of sequence at source frame rate
+
+                # Total frames required for the requested duration
+                self.total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
+
+                # Scale factor based on desired duration relative to input duration
                 original_duration = self.total_frames / source_frame_rate
-                
-                # Calculate the exact number of frames needed for the desired duration at output frame rate
-                total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
-                
-                # Calculate the actual duration based on the exact number of frames
-                actual_duration = total_frames_needed / output_frame_rate
-                
-                # Calculate setpts factor to stretch input timeline to fit desired output frame count
-                output_frame_count = int(math.ceil(output_frame_rate * desired_duration))
-                setpts_factor = output_frame_count / self.total_frames
-                scale_factor = setpts_factor  # Store for use in run_ffmpeg
-                self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
-                print(f"Scale factor updated to: {scale_factor}")  # Debug statement
+                self.scale_factor = desired_duration / original_duration
+                print(f"Scale factor updated to: {self.scale_factor}")
             except ValueError:
                 self.scale_factor = None
+                self.total_frames_needed = None
         else:
             self.scale_factor = None
+            self.total_frames_needed = None
 
     def run_ffmpeg(self):
         print("Debug: run_ffmpeg function called")
@@ -992,19 +982,14 @@ class FFmpegUI:
             if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
                 
-            # Original duration of sequence at source frame rate
-            original_duration = self.total_frames / source_framerate
-            
-            # Calculate the exact number of frames needed for the desired duration at output frame rate
-            total_frames_needed = int(math.ceil(output_framerate * desired_duration))
-            
-            # Calculate the actual duration based on the exact number of frames
+            # Use precomputed values from update_duration
+            total_frames_needed = self.total_frames_needed or int(math.ceil(output_framerate * desired_duration))
+            if self.scale_factor is not None:
+                scale_factor = self.scale_factor
+            else:
+                original_duration = self.total_frames / source_framerate
+                scale_factor = desired_duration / original_duration
             actual_duration = total_frames_needed / output_framerate
-            
-            # Calculate setpts factor to stretch input timeline to fit desired output frame count
-            output_frame_count = int(math.ceil(output_framerate * desired_duration))
-            setpts_factor = output_frame_count / self.total_frames
-            scale_factor = setpts_factor
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
@@ -1058,10 +1043,13 @@ class FFmpegUI:
                 "-minrate", cb,
                 "-maxrate", cb,
                 "-bufsize", cb,
-                "-x264-params", "nal-hrd=cbr"
             ]
             if codec == "h264":
-                video_codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
+                video_codec_params.extend([
+                    "-x264-params", "nal-hrd=cbr",
+                    "-profile:v", "high",
+                    "-level:v", "5.1",
+                ])
             else:
                 video_codec_params.extend(["-tag:v", "hvc1"])
         elif codec.startswith("prores"):
@@ -1122,11 +1110,12 @@ class FFmpegUI:
         elif audio_option == "No Audio":
             output_audio_handling_args = ["-an"] # Output option to disable audio
 
-        cmd += blank_audio_input_args # Add blank audio input args if any
+        cmd += blank_audio_input_args  # Add blank audio input args if any
 
         # --- OUTPUTS, FILTERS, CODECS ---
-        cmd += video_filter_args # Video filters (-vf)
-        cmd += frames_arg       # Exact frame count instead of duration
+        cmd += ["-r", str(output_framerate), "-vsync", "cfr"]
+        cmd += video_filter_args  # Video filters (-vf)
+        cmd += frames_arg        # Exact frame count instead of duration
         
         # Pixel format and video track timescale
         output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
@@ -1706,7 +1695,6 @@ class FFmpegUI:
             "output_filename": self.output_filename.get(),
             "output_folder": self.output_folder.get(),
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else "",
-            "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else "",
             "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else "",
             "prores_qscale": self.prores_qscale.get() if hasattr(self, 'prores_qscale') else "",
         }
