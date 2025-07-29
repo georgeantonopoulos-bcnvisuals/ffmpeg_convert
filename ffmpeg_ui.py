@@ -812,8 +812,9 @@ class FFmpegUI:
                 # Total frames required for the requested duration
                 self.total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
 
-                # Scale factor purely based on frame rate conversion
-                self.scale_factor = output_frame_rate / source_frame_rate
+                # Scale factor based on desired duration relative to input duration
+                original_duration = self.total_frames / source_frame_rate
+                self.scale_factor = desired_duration / original_duration
                 print(f"Scale factor updated to: {self.scale_factor}")
             except ValueError:
                 self.scale_factor = None
@@ -983,7 +984,11 @@ class FFmpegUI:
                 
             # Use precomputed values from update_duration
             total_frames_needed = self.total_frames_needed or int(math.ceil(output_framerate * desired_duration))
-            scale_factor = self.scale_factor if self.scale_factor is not None else output_framerate / source_framerate
+            if self.scale_factor is not None:
+                scale_factor = self.scale_factor
+            else:
+                original_duration = self.total_frames / source_framerate
+                scale_factor = desired_duration / original_duration
             actual_duration = total_frames_needed / output_framerate
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
