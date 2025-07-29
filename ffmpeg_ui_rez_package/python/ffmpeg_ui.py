@@ -790,7 +790,7 @@ class FFmpegUI:
             if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
                 
-            total_frames_needed = self.total_frames_needed or int(round(output_framerate * desired_duration))
+            total_frames_needed = self.total_frames_needed or int(math.ceil(output_framerate * desired_duration))
             scale_factor = self.scale_factor if self.scale_factor is not None else output_framerate / source_framerate
             actual_duration = total_frames_needed / output_framerate
         except ValueError:
