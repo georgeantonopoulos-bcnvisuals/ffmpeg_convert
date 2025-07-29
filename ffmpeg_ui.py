@@ -15,6 +15,7 @@ import glob  # Added for globbing converted files
 import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
+import math
 
 # Add at top with other imports
 try:
@@ -388,8 +389,6 @@ class FFmpegUI:
         self.prores_profile = tk.StringVar(value=self.settings.get("prores_profile", DEFAULT_SETTINGS["prores_profile"]))
         self.prores_qscale = tk.StringVar(value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
         self.mp4_bitrate = tk.StringVar(value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]))
-        self.mp4_crf = tk.StringVar(value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]))
-
         # Codec-specific options frames (parent is output_codec_settings_frame)
         # H.264/H.265 Frame
         self.h264_h265_frame = ttk.Frame(output_codec_settings_frame)
@@ -397,7 +396,6 @@ class FFmpegUI:
         self.h264_h265_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
         
         _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
-        _, self.crf_entry = self._create_labeled_entry(self.h264_h265_frame, "CRF:", row=1, entry_var=self.mp4_crf, default_value=self.settings.get("mp4_crf", DEFAULT_SETTINGS["mp4_crf"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
         
         # ProRes Frame
         self.prores_frame = ttk.Frame(output_codec_settings_frame)
@@ -819,13 +817,15 @@ class FFmpegUI:
                 original_duration = self.total_frames / source_frame_rate
                 
                 # Calculate the exact number of frames needed for the desired duration at output frame rate
-                total_frames_needed = int(round(output_frame_rate * desired_duration))
+                total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
                 
                 # Calculate the actual duration based on the exact number of frames
                 actual_duration = total_frames_needed / output_frame_rate
                 
-                # Calculate scale factor for timestamp adjustment
-                scale_factor = desired_duration / original_duration
+                # Calculate setpts factor to stretch input timeline to fit desired output frame count
+                output_frame_count = int(math.ceil(output_frame_rate * desired_duration))
+                setpts_factor = output_frame_count / self.total_frames
+                scale_factor = setpts_factor  # Store for use in run_ffmpeg
                 self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
                 print(f"Scale factor updated to: {scale_factor}")  # Debug statement
             except ValueError:
@@ -902,8 +902,7 @@ class FFmpegUI:
             # Store codec-specific parameters
             if codec in ["h264", "h265"]:
                 self.exr_conversion_params.update({
-                    'bitrate': self.mp4_bitrate.get(),
-                    'crf': self.mp4_crf.get()
+                    'bitrate': self.mp4_bitrate.get()
                 })
             elif codec.startswith("prores"):
                 self.exr_conversion_params.update({
@@ -997,13 +996,15 @@ class FFmpegUI:
             original_duration = self.total_frames / source_framerate
             
             # Calculate the exact number of frames needed for the desired duration at output frame rate
-            total_frames_needed = int(round(output_framerate * desired_duration))
+            total_frames_needed = int(math.ceil(output_framerate * desired_duration))
             
             # Calculate the actual duration based on the exact number of frames
             actual_duration = total_frames_needed / output_framerate
             
-            # Calculate scale factor for timestamp adjustment
-            scale_factor = desired_duration / original_duration
+            # Calculate setpts factor to stretch input timeline to fit desired output frame count
+            output_frame_count = int(math.ceil(output_framerate * desired_duration))
+            setpts_factor = output_frame_count / self.total_frames
+            scale_factor = setpts_factor
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
@@ -1044,18 +1045,20 @@ class FFmpegUI:
         video_codec_params = []
         if codec in ["h264", "h265"]:
             bitrate = self.mp4_bitrate.get()
-            crf = self.mp4_crf.get()
-            if not bitrate or not crf:
-                self.queue.put(('error', "Bitrate and CRF settings are required for H.264/H.265 encoding."))
+            if not bitrate:
+                self.queue.put(('error', "Bitrate setting is required for constant-bitrate H.264/H.265 encoding."))
                 return
-            
+
             codec_lib = "libx264" if codec == "h264" else "libx265"
+            cb = f"{float(bitrate):.0f}M"
             video_codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
-                "-b:v", f"{bitrate}M",
-                "-maxrate", f"{int(float(bitrate)*2)}M",
-                "-bufsize", f"{int(float(bitrate)*2)}M"
+                "-b:v", cb,
+                "-minrate", cb,
+                "-maxrate", cb,
+                "-bufsize", cb,
+                "-x264-params", "nal-hrd=cbr"
             ]
             if codec == "h264":
                 video_codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
@@ -1083,9 +1086,9 @@ class FFmpegUI:
             return
 
         # Video filters
+        # Use setpts to stretch timeline + fps for frame rate conversion
         setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        # Scale filter for color matrix should ideally be more context-aware based on input if not bt709
-        ffmpeg_filters_str = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+        ffmpeg_filters_str = f"{setpts_filter},fps={output_framerate},scale=in_color_matrix=bt709:out_color_matrix=bt709"
         video_filter_args = ["-vf", ffmpeg_filters_str]
         
         frames_arg = ["-frames:v", str(total_frames_needed)]
@@ -1122,22 +1125,15 @@ class FFmpegUI:
         cmd += blank_audio_input_args # Add blank audio input args if any
 
         # --- OUTPUTS, FILTERS, CODECS ---
-        cmd += [
-            "-t", f"{desired_duration:.6f}",   # Output duration
-            "-r", str(output_framerate),       # Output frame rate
-            "-fps_mode", "cfr",                # Replaces deprecated -vsync cfr for constant frame rate
-        ]
-        
         cmd += video_filter_args # Video filters (-vf)
-
+        cmd += frames_arg       # Exact frame count instead of duration
+        
         # Pixel format and video track timescale
-        # For qtrle (Animation codec), rgb24 is often used. For others, yuv420p is common for compatibility.
         output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
         cmd += [
             "-pix_fmt", output_pix_fmt,
             "-video_track_timescale", "30000"
         ]
-        
         cmd += output_audio_handling_args # Add -an if no audio, or audio codec settings
         
         cmd += video_codec_params         # Video codec settings from UI
@@ -1674,9 +1670,8 @@ class FFmpegUI:
                 
                 # Set codec-specific parameters
                 codec = self.exr_conversion_params['codec']
-                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate') and hasattr(self, 'mp4_crf'):
+                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate'):
                     self.mp4_bitrate.set(self.exr_conversion_params['bitrate'])
-                    self.mp4_crf.set(self.exr_conversion_params['crf'])
                 elif codec.startswith("prores") and hasattr(self, 'prores_profile') and hasattr(self, 'prores_qscale'):
                     self.prores_profile.set(self.exr_conversion_params['profile'])
                     self.prores_qscale.set(self.exr_conversion_params['qscale'])
@@ -1805,6 +1800,8 @@ class FFmpegUI:
     def on_closing(self):
         """Handle window close button"""
         print("\nDEBUG: Application closing, initiating cleanup...")
+        # Save current settings before cleanup
+        self.save_settings()  # Add this line
         self.cleanup()
         self.root.destroy()
 

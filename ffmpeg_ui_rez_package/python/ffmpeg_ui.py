@@ -15,6 +15,7 @@ import glob  # Added for globbing converted files
 import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
+import math
 
 # Create a custom logger class to duplicate output
 class TeeLogger:
@@ -653,7 +654,7 @@ class FFmpegUI:
                 original_duration = self.total_frames / source_frame_rate
                 
                 # Calculate the exact number of frames needed for the desired duration at output frame rate
-                total_frames_needed = int(round(output_frame_rate * desired_duration))
+                total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
                 
                 # Calculate the actual duration based on the exact number of frames
                 actual_duration = total_frames_needed / output_frame_rate
@@ -855,18 +856,20 @@ class FFmpegUI:
         codec_params = []
         if codec in ["h264", "h265"]:
             bitrate = self.mp4_bitrate.get()
-            crf = self.mp4_crf.get()
-            if not bitrate or not crf:
-                self.queue.put(('error', "Bitrate and CRF settings are required for H.264/H.265 encoding."))
+            if not bitrate:
+                self.queue.put(('error', "Bitrate setting is required for constant-bitrate H.264/H.265 encoding."))
                 return
             
             codec_lib = "libx264" if codec == "h264" else "libx265"
+            cb = f"{float(bitrate):.0f}M"
             codec_params = [
                 "-c:v", codec_lib,
                 "-preset", "medium",
-                "-b:v", f"{bitrate}M",
-                "-maxrate", f"{int(float(bitrate)*2)}M",
-                "-bufsize", f"{int(float(bitrate)*2)}M"
+                "-b:v", cb,
+                "-minrate", cb,
+                "-maxrate", cb,
+                "-bufsize", cb,
+                "-x264-params", "nal-hrd=cbr"
             ]
             if codec == "h264":
                 codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
@@ -908,8 +911,7 @@ class FFmpegUI:
         cmd = [
             "ffmpeg",
             "-accurate_seek",
-            "-ss", "0",
-            "-t", f"{desired_duration:.6f}"
+            "-ss", "0"
         ] + input_args + [
             "-r", str(output_framerate),  # Use output frame rate for output
             "-vsync", "cfr"
