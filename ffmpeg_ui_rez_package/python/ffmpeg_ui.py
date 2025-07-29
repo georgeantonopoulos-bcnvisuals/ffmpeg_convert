@@ -46,7 +46,6 @@ DEFAULT_SETTINGS = {
     "desired_duration": "15",
     "codec": "h265",
     "mp4_bitrate": "30",
-    "mp4_crf": "23",
     "prores_profile": "2",  # 422
     "prores_qscale": "9"
 }
@@ -305,7 +304,6 @@ class FFmpegUI:
         self.prores_profile = tk.StringVar()
         self.prores_qscale = tk.StringVar()
         self.mp4_bitrate = tk.StringVar()
-        self.mp4_crf = tk.StringVar()
 
         # Populate h264/h265 settings
         ttk.Label(self.h264_h265_frame, text="Bitrate (Mbps):").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
@@ -313,10 +311,6 @@ class FFmpegUI:
         self.bitrate_entry.insert(0, "30")
         self.bitrate_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
 
-        ttk.Label(self.h264_h265_frame, text="CRF:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.crf_entry = ttk.Entry(self.h264_h265_frame, textvariable=self.mp4_crf, width=10)
-        self.crf_entry.insert(0, "23")
-        self.crf_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
 
         # Populate ProRes settings
         ttk.Label(self.prores_frame, text="ProRes Profile:").grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
@@ -573,7 +567,6 @@ class FFmpegUI:
             "desired_duration": self.desired_duration.get(),
             "codec": self.codec_var.get(),
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else DEFAULT_SETTINGS["mp4_bitrate"],
-            "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else DEFAULT_SETTINGS["mp4_crf"],
             "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else DEFAULT_SETTINGS["prores_profile"],
             "prores_qscale": self.prores_qscale.get() if hasattr(self, 'prores_qscale') else DEFAULT_SETTINGS["prores_qscale"]
         }
@@ -602,8 +595,6 @@ class FFmpegUI:
             # Set MP4 values from settings
             if hasattr(self, 'mp4_bitrate'):
                 self.mp4_bitrate.set(self.settings["mp4_bitrate"])
-            if hasattr(self, 'mp4_crf'):
-                self.mp4_crf.set(self.settings["mp4_crf"])
         elif codec.startswith("prores"):
             self.h264_h265_frame.grid_remove()
             self.prores_frame.grid()
@@ -650,23 +641,18 @@ class FFmpegUI:
                 if source_frame_rate <= 0 or output_frame_rate <= 0 or desired_duration <= 0:
                     raise ValueError
                     
-                # Original duration of sequence at source frame rate
-                original_duration = self.total_frames / source_frame_rate
-                
-                # Calculate the exact number of frames needed for the desired duration at output frame rate
-                total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
-                
-                # Calculate the actual duration based on the exact number of frames
-                actual_duration = total_frames_needed / output_frame_rate
-                
-                # Calculate scale factor for timestamp adjustment
-                scale_factor = desired_duration / original_duration
-                self.scale_factor = scale_factor  # Store scale factor for use in run_ffmpeg
-                print(f"Scale factor updated to: {scale_factor}")  # Debug statement
+                # Total frames required for the requested duration
+                self.total_frames_needed = int(math.ceil(output_frame_rate * desired_duration))
+
+                # Scale factor purely based on frame rate conversion
+                self.scale_factor = output_frame_rate / source_frame_rate
+                print(f"Scale factor updated to: {self.scale_factor}")
             except ValueError:
                 self.scale_factor = None
+                self.total_frames_needed = None
         else:
             self.scale_factor = None
+            self.total_frames_needed = None
 
     def run_ffmpeg(self):
         print("Debug: run_ffmpeg function called")
@@ -730,7 +716,6 @@ class FFmpegUI:
             if codec in ["h264", "h265"]:
                 self.exr_conversion_params.update({
                     'bitrate': self.mp4_bitrate.get(),
-                    'crf': self.mp4_crf.get()
                 })
             elif codec.startswith("prores"):
                 self.exr_conversion_params.update({
@@ -805,17 +790,9 @@ class FFmpegUI:
             if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
                 
-            # Original duration of sequence at source frame rate
-            original_duration = self.total_frames / source_framerate
-            
-            # Calculate the exact number of frames needed for the desired duration at output frame rate
-            total_frames_needed = int(round(output_framerate * desired_duration))
-            
-            # Calculate the actual duration based on the exact number of frames
+            total_frames_needed = self.total_frames_needed or int(round(output_framerate * desired_duration))
+            scale_factor = self.scale_factor if self.scale_factor is not None else output_framerate / source_framerate
             actual_duration = total_frames_needed / output_framerate
-            
-            # Calculate scale factor for timestamp adjustment
-            scale_factor = desired_duration / original_duration
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
@@ -869,10 +846,13 @@ class FFmpegUI:
                 "-minrate", cb,
                 "-maxrate", cb,
                 "-bufsize", cb,
-                "-x264-params", "nal-hrd=cbr"
             ]
             if codec == "h264":
-                codec_params.extend(["-profile:v", "high", "-level:v", "5.1"])
+                codec_params.extend([
+                    "-x264-params", "nal-hrd=cbr",
+                    "-profile:v", "high",
+                    "-level:v", "5.1",
+                ])
             else:
                 codec_params.extend(["-tag:v", "hvc1"])
         elif codec.startswith("prores"):
@@ -1362,9 +1342,8 @@ class FFmpegUI:
                 
                 # Set codec-specific parameters
                 codec = self.exr_conversion_params['codec']
-                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate') and hasattr(self, 'mp4_crf'):
+                if codec in ["h264", "h265"] and hasattr(self, 'mp4_bitrate'):
                     self.mp4_bitrate.set(self.exr_conversion_params['bitrate'])
-                    self.mp4_crf.set(self.exr_conversion_params['crf'])
                 elif codec.startswith("prores") and hasattr(self, 'prores_profile') and hasattr(self, 'prores_qscale'):
                     self.prores_profile.set(self.exr_conversion_params['profile'])
                     self.prores_qscale.set(self.exr_conversion_params['qscale'])
@@ -1397,7 +1376,6 @@ class FFmpegUI:
             "output_filename": self.output_filename.get(),
             "output_folder": self.output_folder.get(),
             "mp4_bitrate": self.mp4_bitrate.get() if hasattr(self, 'mp4_bitrate') else "",
-            "mp4_crf": self.mp4_crf.get() if hasattr(self, 'mp4_crf') else "",
             "prores_profile": self.prores_profile.get() if hasattr(self, 'prores_profile') else "",
             "prores_qscale": self.prores_qscale.get() if hasattr(self, 'prores_qscale') else "",
         }
