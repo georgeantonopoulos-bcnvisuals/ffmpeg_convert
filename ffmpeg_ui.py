@@ -5,7 +5,6 @@ from tkinter import filedialog, messagebox, ttk
 import subprocess
 import os
 import re
-import clique
 import json
 import threading
 from tkinter.font import Font
@@ -16,6 +15,13 @@ import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
 import math
+import importlib
+
+# Defer importing optional dependency `clique` until after dependency checks
+try:
+    import clique  # type: ignore
+except ImportError:
+    clique = None  # type: ignore
 
 # Add at top with other imports
 try:
@@ -57,6 +63,13 @@ DEFAULT_SETTINGS = {
 }
 
 def check_and_install_dependencies():
+    """Verify external tools and Python packages are available, installing when needed.
+
+    Ensures `oiiotool` is present on PATH and that required Python packages like
+    `tkinter` and `clique` are importable. If `clique` is missing, it will be
+    installed and imported into the module's global namespace.
+    """
+    global clique
     def install_package(package):
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -97,11 +110,26 @@ def check_and_install_dependencies():
 
     # Check for clique
     try:
-        import clique
+        clique = importlib.import_module('clique')
     except ImportError:
         print("Clique not found. Installing clique...")
         if not install_package('clique'):
             print("Failed to install clique. Please install it manually.")
+            sys.exit(1)
+        # Import into global namespace after successful installation
+        clique = importlib.import_module('clique')
+
+    # Validate correct 'clique' (must expose 'assemble')
+    if not hasattr(clique, 'assemble'):
+        try:
+            from clique import assemble as _assemble  # type: ignore
+            setattr(clique, 'assemble', _assemble)  # type: ignore[attr-defined]
+        except Exception:
+            loaded_from = getattr(clique, '__file__', 'unknown location')
+            print("ERROR: The loaded 'clique' package does not provide 'assemble'.")
+            print(f"Loaded module path: {loaded_from}")
+            print("This app needs the VFX file-sequence library 'clique' (4degrees).")
+            print("Try: 'pip uninstall -y clique' then 'pip install --upgrade clique' in your venv.")
             sys.exit(1)
 
     print("All dependencies are installed successfully!")
@@ -126,6 +154,7 @@ class FFmpegUI:
         self.active_threads = []
         self.is_shutting_down = False  # Add flag to prevent multiple cleanup attempts
         self.last_successful_output_dir = None # For "Open Output Folder" button
+        self.cancel_requested = False  # Track user-requested cancellation state
         
         # Set up signal handlers
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -417,11 +446,16 @@ class FFmpegUI:
         process_log_frame.grid(row=2, column=0, sticky="nsew", padx=15, pady=(10,15)) # Increased padding
         # Configure grid for process_log_frame
         process_log_frame.grid_columnconfigure(0, weight=1) # Make the first column (where button and progress bar are) expand
+        process_log_frame.grid_columnconfigure(1, weight=0)
         process_log_frame.grid_rowconfigure(4, weight=1)    # Make the text area row (now row 4) expand
 
         self.run_button = ttk.Button(process_log_frame, text="Run FFmpeg", command=self.run_ffmpeg)
         # To center the button, we can make it span one column and rely on the parent's column configure
         self.run_button.grid(row=0, column=0, pady=(10,5)) 
+
+        # Stop Conversion button (initially disabled)
+        self.stop_button = ttk.Button(process_log_frame, text="Stop Conversion", command=self.stop_conversion, state='disabled')
+        self.stop_button.grid(row=0, column=1, pady=(10,5), padx=(10,5))
 
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(process_log_frame, variable=self.progress_var, maximum=100, mode='determinate')
@@ -468,6 +502,42 @@ class FFmpegUI:
                 self.root.iconphoto(False, self._icon_img)
             except Exception as e:
                 print(f"Could not load window icon: {e}")
+
+    def _normalize_fps(self, fps_value_str):
+        """Return normalized FPS representations for FFmpeg and numeric math.
+
+        Accepts a string from the UI (e.g., "59.94" or "60"). If it matches a
+        common NTSC float within a small tolerance, returns the exact rational
+        (e.g., "60000/1001"). Otherwise returns the numeric value and a plain
+        decimal string suitable for FFmpeg.
+
+        Returns:
+        - numeric_fps (float): high-precision numeric value for math
+        - ffmpeg_fps_str (str): value to pass to FFmpeg (rational or decimal)
+        - num (int|None), den (int|None): numerator/denominator if NTSC match, else None
+        """
+        try:
+            value = float(str(fps_value_str).strip())
+        except Exception:
+            # Fallback to 0 to trigger validation error upstream
+            return 0.0, str(fps_value_str), None, None
+
+        # Known NTSC-like rates mapping
+        ntsc_map = {
+            23.976: (24000, 1001),
+            29.97: (30000, 1001),
+            47.952: (48000, 1001),
+            59.94: (60000, 1001),
+            119.88: (120000, 1001),
+            14.985: (15000, 1001),
+        }
+        tol = 1e-3
+        for approx, (n, d) in ntsc_map.items():
+            if abs(value - approx) < tol:
+                return n / d, f"{n}/{d}", n, d
+
+        # No match: use decimal
+        return value, f"{value}", None, None
 
     def _create_labeled_entry(self, parent, label_text, row, col_offset=0, default_value="", browse_command=None, entry_var=None, bind_event=None, bind_callback=None, columnspan_entry=1, columnspan_label=1, sticky_label="w", sticky_entry="ew", padx_label=(10,5), pady_label=(8,8), padx_entry=(5,10), pady_entry=(8,8), padx_browse=(5,10), pady_browse=(8,8), entry_width=None):
         label = ttk.Label(parent, text=label_text, font=self.custom_font)
@@ -799,6 +869,14 @@ class FFmpegUI:
         self.update_duration()
 
     def update_duration(self, event=None):
+        """Update derived timing based on current UI values.
+
+        Stores:
+        - total_frames_needed: frames if locking output to desired duration
+        - scale_factor: PTS multiplier for desired/original duration
+
+        Final retiming policy is decided in run_ffmpeg().
+        """
         # This method now calculates the scale factor based on desired duration and frame rate
         if hasattr(self, 'total_frames') and self.total_frames > 0:
             try:
@@ -824,6 +902,17 @@ class FFmpegUI:
             self.total_frames_needed = None
 
     def run_ffmpeg(self):
+        """Build and execute FFmpeg command with correct retiming behavior.
+
+        Policy:
+        - If output fps differs from source fps and desired duration equals
+          original duration (within small tolerance), retime by
+          scale_factor = source_fps/output_fps. This preserves all frames and
+          extends/shortens duration accordingly.
+        - Otherwise, honor desired duration using
+          scale_factor = desired/original, without limiting output frames via
+          -frames:v. CFR is enforced with fps filter + -fps_mode cfr.
+        """
         print("Debug: run_ffmpeg function called")
 
         # For now, we'll force image sequence mode since video file handling isn't fully implemented
@@ -900,6 +989,16 @@ class FFmpegUI:
                     'qscale': self.prores_qscale.get()
                 })
 
+            # Prepare UI state for active processing
+            self.cancel_requested = False
+            self.run_button.config(state='disabled')
+            self.stop_button.config(state='normal')
+            try:
+                self.open_output_folder_button.grid_remove()
+                self.last_successful_output_dir = None
+            except Exception:
+                pass
+
             # Launch the conversion in a separate thread so that the UI isn't blocked.
             conversion_thread = threading.Thread(
                 target=self.convert_exr_files,
@@ -975,21 +1074,20 @@ class FFmpegUI:
         self.queue.put(('output', f"First frame path: {test_file}\n"))
 
         try:
-            source_framerate = float(self.source_frame_rate_var.get()) # Use var
-            output_framerate = float(self.frame_rate_var.get()) # Use var
+            # Normalize FPS values to handle NTSC rates as exact rationals
+            src_num_fps, src_ffmpeg_fps_str, src_num, src_den = self._normalize_fps(self.source_frame_rate_var.get())
+            out_num_fps, out_ffmpeg_fps_str, out_num, out_den = self._normalize_fps(self.frame_rate_var.get())
             desired_duration = float(self.desired_duration_var.get()) # Use var
             
-            if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
+            if src_num_fps <= 0 or out_num_fps <= 0 or desired_duration <= 0:
                 raise ValueError
                 
-            # Use precomputed values from update_duration
-            total_frames_needed = self.total_frames_needed or int(math.ceil(output_framerate * desired_duration))
-            if self.scale_factor is not None:
-                scale_factor = self.scale_factor
-            else:
-                original_duration = self.total_frames / source_framerate
-                scale_factor = desired_duration / original_duration
-            actual_duration = total_frames_needed / output_framerate
+            original_duration = self.total_frames / src_num_fps
+            # Always honor desired duration to avoid unintended stretching when FPS differs
+            scale_factor = desired_duration / original_duration
+            actual_duration = desired_duration
+            # Expected output frames exactly equals output_fps * duration (rounded)
+            self.total_frames_needed = int(round(out_num_fps * actual_duration))
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
@@ -997,7 +1095,7 @@ class FFmpegUI:
         output_file = self.output_filename_var.get().strip() # Use var
         output_dir = self.output_folder_var.get() # Use var
 
-        if not all([img_folder, pattern, output_framerate, output_file, output_dir]):
+        if not all([img_folder, pattern, out_ffmpeg_fps_str, output_file, output_dir]):
             self.queue.put(('error', "Please fill in all fields."))
             return
 
@@ -1017,7 +1115,7 @@ class FFmpegUI:
             input_path = os.path.join(img_folder, input_pattern)
             image_sequence_input_args = [
                 "-start_number", str(start_frame),
-                "-framerate", str(source_framerate),  # Use source frame rate for input
+                "-framerate", src_ffmpeg_fps_str,  # Use normalized source frame rate for input
                 "-i", input_path
             ]
         else:
@@ -1074,12 +1172,11 @@ class FFmpegUI:
             return
 
         # Video filters
-        # Use setpts to stretch timeline + fps for frame rate conversion
+        # Use setpts to retime timeline + fps for CFR frame generation
+        # Retiming: scale PTS to lock final duration, then generate CFR frames at output fps
         setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        ffmpeg_filters_str = f"{setpts_filter},fps={output_framerate},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+        ffmpeg_filters_str = f"{setpts_filter},fps={out_ffmpeg_fps_str},scale=in_color_matrix=bt709:out_color_matrix=bt709"
         video_filter_args = ["-vf", ffmpeg_filters_str]
-        
-        frames_arg = ["-frames:v", str(total_frames_needed)]
         
         output_color_space_args = [
             "-color_primaries", "bt709",
@@ -1088,7 +1185,7 @@ class FFmpegUI:
         ]
 
         # --- Construct the ffmpeg command --- 
-        cmd = ["ffmpeg", "-accurate_seek"] # Base command and global options
+        cmd = ["ffmpeg", "-y", "-accurate_seek"] # Base command and global options; -y to avoid overwrite prompts
 
         # --- INPUTS ---
         # Image sequence input (with -ss 0 for fast seeking at start of this input)
@@ -1113,30 +1210,52 @@ class FFmpegUI:
         cmd += blank_audio_input_args  # Add blank audio input args if any
 
         # --- OUTPUTS, FILTERS, CODECS ---
-        cmd += ["-r", str(output_framerate), "-vsync", "cfr"]
+        # Use fps filter for CFR and avoid duplicate resampling with -r
+        cmd += ["-fps_mode", "cfr"]
         cmd += video_filter_args  # Video filters (-vf)
-        cmd += frames_arg        # Exact frame count instead of duration
         
         # Pixel format and video track timescale
         output_pix_fmt = "rgb24" if codec == "qtrle" else "yuv420p"
+        # Choose a sane timescale based on output fps. If NTSC (n/d), use numerator n.
+        if out_num is not None and out_den is not None:
+            track_timescale = str(out_num)
+        else:
+            # For non-NTSC, pick 1000 * fps (rounded) to get millisecond resolution or better
+            try:
+                track_timescale = str(int(round(out_num_fps * 1000)))
+            except Exception:
+                track_timescale = "30000"
         cmd += [
             "-pix_fmt", output_pix_fmt,
-            "-video_track_timescale", "30000"
+            "-video_track_timescale", track_timescale
         ]
         cmd += output_audio_handling_args # Add -an if no audio, or audio codec settings
         
         cmd += video_codec_params         # Video codec settings from UI
         cmd += output_color_space_args     # Output video color space settings
 
+        # Ensure we output exactly the expected number of frames
+        if hasattr(self, 'total_frames_needed') and self.total_frames_needed:
+            cmd += ["-frames:v", str(int(self.total_frames_needed))]
         cmd += [output_path]                # Output file path
 
         print("FFmpeg command:", " ".join(cmd))
+
+        # Prepare UI state for active processing
+        self.cancel_requested = False
+        self.run_button.config(state='disabled')
+        self.stop_button.config(state='normal')
 
         # Execute the ffmpeg command in a separate thread
         thread = threading.Thread(target=self.execute_ffmpeg, args=(cmd, output_path, actual_duration))
         thread.start()
 
     def execute_ffmpeg(self, cmd, output_path, actual_duration):
+        """Run FFmpeg with streaming logs and cooperative cancellation support.
+
+        Adds the spawned process and its reader threads to tracking lists so they
+        can be terminated when the user clicks Stop Conversion.
+        """
         try:
             self.queue.put(('output', "Starting FFmpeg process...\n"))
             print(f"\nExecuting FFmpeg command:\n{' '.join(cmd)}\n")
@@ -1167,8 +1286,13 @@ class FFmpegUI:
                                 
                                 if frame_match:
                                     current_frame = int(frame_match.group(1))
-                                    progress = (current_frame / self.total_frames) * 100 if self.total_frames > 0 else 0
-                                    status_parts = [f"Frame: {current_frame}/{self.total_frames}"]
+                                    target_total = 0
+                                    if hasattr(self, 'total_frames_needed') and self.total_frames_needed:
+                                        target_total = int(self.total_frames_needed)
+                                    elif hasattr(self, 'total_frames') and self.total_frames:
+                                        target_total = int(self.total_frames)
+                                    progress = (current_frame / target_total) * 100 if target_total > 0 else 0
+                                    status_parts = [f"Frame: {current_frame}/{target_total if target_total else '?'}"]
                                     if time_match:
                                         status_parts.append(f"Time: {time_match.group(1)}")
                                     if speed_match:
@@ -1197,10 +1321,20 @@ class FFmpegUI:
             stderr_thread.daemon = True
             stdout_thread.start()
             stderr_thread.start()
+            # Track reader threads to allow graceful shutdown
+            self.active_threads.append(stdout_thread)
+            self.active_threads.append(stderr_thread)
 
             process.wait()
             stdout_thread.join(timeout=1)
             stderr_thread.join(timeout=1)
+
+            # Remove finished process from active list if present
+            try:
+                if process in self.active_processes:
+                    self.active_processes.remove(process)
+            except Exception:
+                pass
 
             # Clean up temp directory if it exists and ffmpeg completed successfully
             if process.returncode == 0 and hasattr(self, 'temp_dir') and os.path.exists(self.temp_dir):
@@ -1214,14 +1348,18 @@ class FFmpegUI:
                     self.queue.put(('output', f"Warning: Could not clean up temp files: {e}\n"))
 
             if process.returncode != 0:
-                error_message = f"FFmpeg process returned {process.returncode}"
-                try:
-                    remaining_error = process.stderr.read()
-                    if remaining_error:
-                        error_message += f"\nError details:\n{remaining_error}"
-                except:
-                    pass
-                self.queue.put(('error', error_message))
+                if self.cancel_requested:
+                    self.queue.put(('output', "Conversion cancelled by user.\n"))
+                    self.queue.put(('cancelled', None))
+                else:
+                    error_message = f"FFmpeg process returned {process.returncode}"
+                    try:
+                        remaining_error = process.stderr.read()
+                        if remaining_error:
+                            error_message += f"\nError details:\n{remaining_error}"
+                    except:
+                        pass
+                    self.queue.put(('error', error_message))
             else:
                 success_message = f"Video created at {output_path}\nActual duration: {actual_duration:.3f} seconds"
                 self.queue.put(('success', success_message))
@@ -1234,6 +1372,47 @@ class FFmpegUI:
 
         except Exception as e:
             self.queue.put(('error', f"Unexpected error: {str(e)}"))
+
+    def stop_conversion(self):
+        """Stop any active conversion and reset UI state.
+
+        Sets a cancellation flag, terminates any tracked subprocesses, and
+        signals the UI loop to update controls and status.
+        """
+        try:
+            self.cancel_requested = True
+            self.queue.put(('output', "\nStopping conversion...\n"))
+            self.terminate_active_processes()
+            self.queue.put(('cancelled', None))
+        except Exception as e:
+            self.queue.put(('error', f"Failed to stop conversion: {e}"))
+
+    def terminate_active_processes(self):
+        """Terminate all processes recorded in `self.active_processes`.
+
+        Attempts graceful termination first and escalates to kill if needed.
+        Intended for user cancellations; does not toggle shutdown flags.
+        """
+        for process in list(self.active_processes):
+            try:
+                if process and process.poll() is None:
+                    pid = process.pid
+                    print(f"DEBUG: Stopping process {pid}")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                        print(f"DEBUG: Process {pid} terminated")
+                    except subprocess.TimeoutExpired:
+                        print(f"DEBUG: Killing process {pid}")
+                        process.kill()
+                        try:
+                            process.wait(timeout=1)
+                        except subprocess.TimeoutExpired:
+                            print(f"DEBUG: Failed to kill process {pid}")
+            except Exception as e:
+                print(f"DEBUG: Error terminating active process: {e}")
+        # Clear after attempts
+        self.active_processes = []
 
     def process_queue(self):
         try:
@@ -1248,10 +1427,16 @@ class FFmpegUI:
                     self.status_label.config(text=status)
                 elif msg_type == 'error':
                     messagebox.showerror("FFmpeg Error", content)
+                    # Reset controls on error
+                    self.run_button.config(state='normal')
+                    self.stop_button.config(state='disabled')
                 elif msg_type == 'success':
                     self.progress_var.set(100)
                     self.status_label.config(text="Conversion complete")
                     messagebox.showinfo("Success", content)
+                    # Reset controls on success
+                    self.run_button.config(state='normal')
+                    self.stop_button.config(state='disabled')
                 elif msg_type == 'prepare_ffmpeg':
                     # Handle FFmpeg preparation on main thread
                     self.prepare_ffmpeg_conversion(content)
@@ -1269,6 +1454,11 @@ class FFmpegUI:
                 elif msg_type == 'hide_open_folder_button':
                     self.open_output_folder_button.grid_remove()
                     self.last_successful_output_dir = None
+                elif msg_type == 'cancelled':
+                    # Conversion cancelled by user
+                    self.status_label.config(text="Conversion cancelled")
+                    self.run_button.config(state='normal')
+                    self.stop_button.config(state='disabled')
         except queue.Empty:
             pass
         finally:
@@ -1305,6 +1495,9 @@ class FFmpegUI:
     def convert_exr_files(self, img_folder, pattern, start_frame, end_frame, before):
         print("\nDEBUG: convert_exr_files starting")
         self.queue.put(('output', "\nDEBUG: Starting EXR conversion (thread)...\n"))
+        # New run: ensure cancellation flag is reset
+        if self.cancel_requested:
+            self.cancel_requested = False
         
         # Define OCIO configuration path
         ocio_config = "/mnt/studio/config/ocio/aces_1.2/config.ocio"
@@ -1464,6 +1657,8 @@ class FFmpegUI:
             def process_file(cmd_info):
                 cmd, frame_num = cmd_info
                 try:
+                    if self.cancel_requested:
+                        return (frame_num, -2, 'cancelled')
                     print(f"DEBUG: Starting conversion for frame {frame_num}")
                     process = subprocess.Popen(
                         cmd,
@@ -1471,7 +1666,15 @@ class FFmpegUI:
                         stderr=subprocess.PIPE,
                         universal_newlines=True
                     )
+                    # Track worker process for potential cancellation
+                    self.active_processes.append(process)
                     stdout, stderr = process.communicate()
+                    # Remove from active list when done
+                    try:
+                        if process in self.active_processes:
+                            self.active_processes.remove(process)
+                    except Exception:
+                        pass
                     
                     # Log detailed output for debugging
                     if stdout:
@@ -1502,9 +1705,14 @@ class FFmpegUI:
             results = []
             
             while cmd_queue or threads:
+                if self.cancel_requested:
+                    # Stop launching new work and break loop
+                    break
                 # Start new workers if we have capacity and commands
                 while active_workers < max_workers and cmd_queue:
                     cmd_info = cmd_queue.pop(0)
+                    if self.cancel_requested:
+                        break
                     thread = threading.Thread(target=lambda c=cmd_info: results.append(process_file(c)))
                     thread.daemon = True
                     thread.start()
@@ -1527,6 +1735,12 @@ class FFmpegUI:
                 threads = still_active
                 time.sleep(0.1)  # Don't hammer the CPU checking thread status
             
+            # If user cancelled, notify and exit early
+            if self.cancel_requested:
+                self.queue.put(('output', "EXR conversion cancelled by user.\n"))
+                self.queue.put(('cancelled', None))
+                return
+
             # Check results
             failures = [r for r in results if r[1] != 0]
             if failures:

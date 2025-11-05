@@ -1,4 +1,10 @@
 #!/bin/bash
+# Ensure the UI runs inside a Rez environment so that `oiiotool` has
+# OpenColorIO support and Python deps are available.
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PACKAGE_ROOT="$(dirname "$SCRIPT_DIR")"
-python "$PACKAGE_ROOT/python/ffmpeg_ui.py" "$@" 
+
+# Enter rez env with required packages, then run the UI from the installed
+# package's python directory using the current system python.
+rez env openimageio opencolorio tkinter clique -- \
+    python "$PACKAGE_ROOT/python/ffmpeg_ui.py" "$@"

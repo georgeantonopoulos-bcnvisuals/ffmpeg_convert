@@ -8,10 +8,19 @@ authors = ["BCN Visuals"]
 requires = [
     "tkinter",
     "openimageio",
+    "opencolorio",
     "clique"  # From the launch script, we see this dependency
 ]
 
 def commands():
+    """Configure runtime environment for the Rez package.
+
+    - Prepend the package's `bin` directory to `PATH` so the `ffmpeg-ui` entry
+      point is available.
+    - Prepend the package's `python` directory to `PYTHONPATH` so Python modules
+      bundled with the package can be imported when running `ffmpeg_ui.py`.
+    - Create a convenient `ffmpeg-ui` alias that invokes the launcher script.
+    """
     import os.path
     
     # Add the package root to PATH
@@ -24,11 +33,23 @@ def commands():
     alias("ffmpeg-ui", "{root}/bin/ffmpeg-ui")
 
 def pre_build_commands():
+    """Ensure build-time Python dependencies are present.
+
+    Currently we install `clique` which is used by the UI for sequence
+    detection. This is a convenience for developers performing `rez build`.
+    """
     # Make sure clique is installed
     import subprocess
     subprocess.check_call(["pip", "install", "clique"])
 
 def post_install():
+    """Copy required assets to the install area and create launcher.
+
+    - Copies Python modules and theme assets into the package's `python`
+      directory in the install root.
+    - Writes a small launcher script `bin/ffmpeg-ui` that executes the UI from
+      the installed package location.
+    """
     import os
     import shutil
     

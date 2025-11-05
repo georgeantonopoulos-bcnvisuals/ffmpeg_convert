@@ -1,2 +1,2 @@
 tkinter
-clique
+#clique>=1.6,<2

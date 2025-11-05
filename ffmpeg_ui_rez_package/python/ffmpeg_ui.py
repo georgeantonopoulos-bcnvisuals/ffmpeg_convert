@@ -5,7 +5,6 @@ from tkinter import filedialog, messagebox, ttk
 import subprocess
 import os
 import re
-import clique
 import json
 import threading
 from tkinter.font import Font
@@ -16,6 +15,13 @@ import select, fcntl, time
 import signal  # Add at the top with other imports
 import shutil  # Add import for directory operations
 import math
+import importlib
+
+# Defer importing optional dependency `clique` until after dependency checks
+try:
+    import clique  # type: ignore
+except ImportError:
+    clique = None  # type: ignore
 
 # Create a custom logger class to duplicate output
 class TeeLogger:
@@ -51,6 +57,13 @@ DEFAULT_SETTINGS = {
 }
 
 def check_and_install_dependencies():
+    """Verify external tools and Python packages are available, installing when needed.
+
+    Ensures `oiiotool` is present on PATH and that required Python packages like
+    `tkinter` and `clique` are importable. If `clique` is missing, it will be
+    installed and imported into the module's global namespace.
+    """
+    global clique
     def install_package(package):
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", package])
@@ -91,11 +104,26 @@ def check_and_install_dependencies():
 
     # Check for clique
     try:
-        import clique
+        clique = importlib.import_module('clique')
     except ImportError:
         print("Clique not found. Installing clique...")
         if not install_package('clique'):
             print("Failed to install clique. Please install it manually.")
+            sys.exit(1)
+        # Import into global namespace after successful installation
+        clique = importlib.import_module('clique')
+
+    # Validate correct 'clique' (must expose 'assemble')
+    if not hasattr(clique, 'assemble'):
+        try:
+            from clique import assemble as _assemble  # type: ignore
+            setattr(clique, 'assemble', _assemble)  # type: ignore[attr-defined]
+        except Exception:
+            loaded_from = getattr(clique, '__file__', 'unknown location')
+            print("ERROR: The loaded 'clique' package does not provide 'assemble'.")
+            print(f"Loaded module path: {loaded_from}")
+            print("This app needs the VFX file-sequence library 'clique' (4degrees).")
+            print("Try: 'pip uninstall -y clique' then 'pip install --upgrade clique' in your venv, or fix the Rez package.")
             sys.exit(1)
 
     print("All dependencies are installed successfully!")
@@ -631,6 +659,16 @@ class FFmpegUI:
         self.update_duration()
 
     def update_duration(self, event=None):
+        """Update derived timing based on UI fields.
+
+        Computes and stores:
+        - total_frames_needed: output frames if locking to desired duration
+        - scale_factor: PTS multiplier to achieve desired duration from original
+
+        Note: Final retiming logic (preserve duration vs preserve content when
+        changing frame rate) is decided in run_ffmpeg() where we can compare
+        source/output fps and user-entered duration.
+        """
         # This method now calculates the scale factor based on desired duration and frame rate
         if hasattr(self, 'total_frames') and self.total_frames > 0:
             try:
@@ -656,6 +694,20 @@ class FFmpegUI:
             self.total_frames_needed = None
 
     def run_ffmpeg(self):
+        """Construct and execute the FFmpeg command.
+
+        Retiming policy:
+        - If output fps differs from source fps AND the user-entered desired
+          duration equals the original duration (within a tiny tolerance), we
+          RETIME the sequence to the new fps by scaling timestamps by
+          (source_fps / output_fps). This preserves all input frames and lets
+          the output duration change accordingly (e.g., 600@60fps -> 600@50fps
+          yields 12s).
+        - Otherwise (user explicitly sets a different duration), we honor the
+          desired duration by scaling PTS with desired/original. We do not cap
+          the frame count with -frames:v; FFmpeg will emit frames for the whole
+          source with adjusted timestamps.
+        """
         print("Debug: run_ffmpeg function called")
 
         # For now, we'll force image sequence mode since video file handling isn't fully implemented
@@ -791,13 +843,17 @@ class FFmpegUI:
             if source_framerate <= 0 or output_framerate <= 0 or desired_duration <= 0:
                 raise ValueError
                 
-            total_frames_needed = self.total_frames_needed or int(math.ceil(output_framerate * desired_duration))
-            if self.scale_factor is not None:
-                scale_factor = self.scale_factor
+            original_duration = self.total_frames / source_framerate
+            durations_equal = abs(desired_duration - original_duration) < 1e-3
+
+            if output_framerate != source_framerate and durations_equal:
+                # Retiming mode: preserve all frames, adjust playback speed by fps ratio
+                scale_factor = source_framerate / output_framerate
+                actual_duration = original_duration * scale_factor
             else:
-                original_duration = self.total_frames / source_framerate
+                # Duration-lock mode: honor desired seconds
                 scale_factor = desired_duration / original_duration
-            actual_duration = total_frames_needed / output_framerate
+                actual_duration = desired_duration
         except ValueError:
             self.queue.put(('error', "Please enter valid frame rates and desired duration."))
             return
@@ -881,11 +937,10 @@ class FFmpegUI:
             self.queue.put(('error', "Unsupported codec selected."))
             return
 
-        # Use a single setpts filter with the calculated scale factor
+        # Use a setpts filter with the calculated scale factor, then generate CFR via fps filter
         setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        ffmpeg_filters = f"{setpts_filter},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+        ffmpeg_filters = f"{setpts_filter},fps={output_framerate},scale=in_color_matrix=bt709:out_color_matrix=bt709"
         ffmpeg_filter_args = ["-vf", ffmpeg_filters]
-        frames_arg = ["-frames:v", str(total_frames_needed)]
         color_space_args = [
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
@@ -895,12 +950,13 @@ class FFmpegUI:
         # Construct the ffmpeg command
         cmd = [
             "ffmpeg",
+            "-y",
             "-accurate_seek",
             "-ss", "0"
         ] + input_args + [
-            "-r", str(output_framerate),  # Use output frame rate for output
-            "-vsync", "cfr"
-        ] + ffmpeg_filter_args + frames_arg + [
+            # Rely on fps filter to enforce CFR; avoid duplicate resampling with -r
+            "-fps_mode", "cfr"
+        ] + ffmpeg_filter_args + [
             "-pix_fmt", "yuv420p",
             "-video_track_timescale", "30000",
             "-an"
