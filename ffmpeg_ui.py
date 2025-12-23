@@ -176,106 +176,7 @@ class FFmpegUI:
         self.title_font = Font(family="Roboto", size=11, weight="bold") # Slightly smaller title for LabelFrames
 
         # Set up dark theme
-        self.style = ttk.Style()
-        #self.style.theme_use("clam")
-
-        # Load the custom TCL files
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        rounded_buttons_path = os.path.join(script_dir, "rounded_buttons.tcl")
-        dark_theme_path = os.path.join(script_dir, "dark_theme.tcl")
-
-        try:
-            self.root.tk.call("source", rounded_buttons_path)
-            self.root.tk.call("source", dark_theme_path)
-            self.style.theme_use("dark")  # Use the dark theme after loading
-        except tk.TclError as e:
-            print(f"Error loading TCL files: {e}")
-            # Fallback to basic styling if TCL files fail to load
-            self.style.configure(".",
-                                 background="#2b2b2b",
-                                 foreground="#ffffff",
-                                 fieldbackground="#3c3f41",
-                                 font=self.custom_font)
-        
-        # General widget styling enhancements
-        self.style.configure("TEntry", 
-                             relief="flat", 
-                             borderwidth=1, 
-                             bordercolor="#555555", # Subtle border for entries
-                             fieldbackground="#3c3f41",
-                             foreground="#ffffff",
-                             insertbackground="#ffffff") # Cursor color
-        self.style.map("TEntry",
-                       bordercolor=[('focus', '#777777')]) # Border color on focus
-
-        self.style.configure("TCombobox", 
-                             relief="flat", 
-                             borderwidth=1,
-                             bordercolor="#555555",
-                             arrowcolor="#ffffff",
-                             foreground="#ffffff")
-        self.style.map("TCombobox",
-                       bordercolor=[('focus', '#777777')],
-                       selectbackground=[('readonly', '#4a4a4a')], # Slightly lighter selection
-                       selectforeground=[('readonly', '#ffffff')],
-                       fieldbackground=[('readonly', '#3c3f41')],
-                       background=[('readonly', '#3c3f41')])
-
-        # Additional modern styling for common widgets
-        self.style.configure("TLabel",    background="#2b2b2b", foreground="#ffffff")
-        self.style.configure("TFrame",    background="#2b2b2b")
-        self.style.configure("TCheckbutton", background="#2b2b2b", foreground="#ffffff")
-        self.style.configure("TRadiobutton", background="#2b2b2b", foreground="#ffffff")
-        self.style.configure("TMenubutton",  relief="flat", borderwidth=1, background="#3c3f41", foreground="#ffffff")
-
-        # Button style with outline and round edges (complementing TCL)
-        self.style.configure("TButton",
-                             padding=6,
-                             relief="flat",
-                             background="#4a4a4a", # Slightly lighter button background
-                             foreground="#ffffff",
-                             borderwidth=1,
-                             bordercolor="#666666", # Subtle border for buttons
-                             focusthickness=0) # Remove focus ring if TCL handles it
-        self.style.map("TButton",
-                       background=[('active', '#5c5c5c'), ('pressed', '#5c5c5c')],
-                       bordercolor=[('active', '#888888')])
-        
-        # Configure grid
-        # self.root.grid_columnconfigure(1, weight=1) # Old configuration
-        # for i in range(12):  # Increased range to accommodate new widgets # Old configuration
-        #     self.root.grid_rowconfigure(i, weight=1) # Old configuration
-
-        # Configure progress bar style
-        self.style.configure(
-            "Horizontal.TProgressbar",
-            troughcolor='#2b2b2b',
-            background='#00ff00',
-            darkcolor='#00cc00',
-            lightcolor='#00ee00',
-            bordercolor='#2b2b2b'
-        )
-
-        # Configure Combobox style for dark selection
-        self.style.map('TCombobox',
-            selectbackground=[('readonly', '#404040')],
-            selectforeground=[('readonly', '#ffffff')],
-            fieldbackground=[('readonly', '#2b2b2b')],
-            background=[('readonly', '#2b2b2b')]
-        )
-        
-        # ttk.LabelFrame style
-        self.style.configure("TLabelframe", 
-                             padding=10, 
-                             relief="solid", # Cleaner relief
-                             borderwidth=1,
-                             bordercolor="#444444", # Darker border for labelframe
-                             background="#2b2b2b")
-        self.style.configure("TLabelframe.Label", 
-                             font=self.title_font, 
-                             foreground="#dddddd", # Brighter label text
-                             background="#2b2b2b",
-                             padding=(0,0,0,5)) # Add some bottom padding to label title
+        self._setup_theme()
 
 
         # --- Main Layout ---
@@ -426,17 +327,18 @@ class FFmpegUI:
         _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
         
         # ProRes Frame
+        # ProRes Frame
         self.prores_frame = ttk.Frame(output_codec_settings_frame)
         # Grid it on the same row as h264_h265_frame; update_codec will manage visibility
-        self.prores_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5) 
+        self.prores_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         self.prores_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
-
+        
         # ProRes Profile Label (not an entry, just text updated by update_codec)
         ttk.Label(self.prores_frame, text="ProRes Profile:", font=self.custom_font).grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.prores_profile_label = ttk.Label(self.prores_frame, text="", font=self.custom_font) # Text set by update_codec
         self.prores_profile_label.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
         
-        _, self.qscale_entry = self._create_labeled_entry(self.prores_frame, "Quality (qscale:v):", row=1, entry_var=self.prores_qscale, default_value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]), entry_width=10)
+        _, self.qscale_entry = self._create_labeled_entry(self.prores_frame, "Quality (qscale:v):", row=1, entry_var=self.prores_qscale, default_value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
         
         self.prores_frame.grid_remove() # Initially hidden by default
         # current_row_output += 1 # This row is shared by codec-specific frames
@@ -502,6 +404,93 @@ class FFmpegUI:
                 self.root.iconphoto(False, self._icon_img)
             except Exception as e:
                 print(f"Could not load window icon: {e}")
+
+    def _setup_theme(self):
+        """Setup a basic dark theme using standard ttk elements."""
+        self.style = ttk.Style(master=self.root)
+        
+        # Try to use 'clam' if available, as it supports color customization better
+        # Disabled as it might cause crashes on some Linux systems
+        # start_theme = self.style.theme_use()
+        # if 'clam' in self.style.theme_names():
+        #     self.style.theme_use('clam')
+        
+        # Colors for the dark theme
+        colors = {
+            "bg": "#2b2b2b",
+            "fg": "#ffffff",
+            "select_bg": "#4a6984",
+            "select_fg": "#ffffff",
+            "disabled_fg": "#777777",
+            "entry_bg": "#3c3f41",
+            "button_bg": "#4a4a4a",
+            "button_active": "#5c5c5c",
+            "border": "#444444",
+            "trough": "#2b2b2b",
+            "progress": "#00ff00"
+        }
+
+        # Configure generic styles
+        self.style.configure(".",
+            background=colors["bg"],
+            foreground=colors["fg"],
+            troughcolor=colors["bg"],
+            font=self.custom_font,
+            borderwidth=1,
+        )
+        
+        self.style.map(".",
+            background=[('active', colors["button_active"])],
+            foreground=[('disabled', colors["disabled_fg"])]
+        )
+
+        # Button
+        self.style.configure("TButton",
+            background=colors["button_bg"],
+            foreground=colors["fg"],
+            padding=6,
+            relief="raised"
+        )
+        self.style.map("TButton",
+            background=[('pressed', "#333333"), ('active', colors["button_active"])],
+            relief=[('pressed', 'sunken')]
+        )
+
+        # Entry
+        self.style.configure("TEntry",
+            fieldbackground=colors["entry_bg"],
+            foreground=colors["fg"],
+            insertcolor=colors["fg"],
+            relief="solid",
+            borderwidth=1
+        )
+        
+        # Combobox
+        self.style.configure("TCombobox",
+            fieldbackground=colors["entry_bg"],
+            foreground=colors["fg"],
+            arrowcolor=colors["fg"],
+            relief="solid"
+        )
+        self.style.map("TCombobox",
+            fieldbackground=[('readonly', colors["entry_bg"])],
+            selectbackground=[('readonly', colors["select_bg"])],
+            selectforeground=[('readonly', colors["select_fg"])]
+        )
+        
+        # Labelframe
+        self.style.configure("TLabelframe", 
+            relief="solid", 
+            borderwidth=1,
+            bordercolor=colors["border"],
+            background=colors["bg"])
+        
+        self.style.configure("TLabelframe.Label", 
+            font=self.title_font, 
+            foreground="#dddddd", 
+            background=colors["bg"])
+
+        print("Debug: _setup_theme - end")
 
     def _normalize_fps(self, fps_value_str):
         """Return normalized FPS representations for FFmpeg and numeric math.

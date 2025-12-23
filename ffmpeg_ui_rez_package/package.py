@@ -72,13 +72,6 @@ def post_install():
             print(f"Copying {src} to {dst}")
             shutil.copy2(src, dst)
     
-    # Copy themes to the python directory
-    for tcl_file in ["dark_theme.tcl", "rounded_buttons.tcl"]:
-        src = os.path.join(project_root, tcl_file)
-        dst = os.path.join(python_dir, tcl_file)
-        if os.path.exists(src):
-            print(f"Copying {src} to {dst}")
-            shutil.copy2(src, dst)
     
     # Create a launcher script in bin directory
     launcher_path = os.path.join(bin_dir, "ffmpeg-ui")
