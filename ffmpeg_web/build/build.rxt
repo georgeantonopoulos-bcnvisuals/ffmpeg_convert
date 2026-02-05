@@ -1,0 +1,55 @@
+{
+    "append_sys_path": true,
+    "arch": "x86_64",
+    "building": true,
+    "caching": true,
+    "created": 1770308448,
+    "default_patch_lock": "no_lock",
+    "failure_description": null,
+    "from_cache": false,
+    "graph": "{'nodes': [((('fillcolor', '#FFFFAA'), ('fontsize', 10), ('style', 'filled,dashed')), [('_1', 'python-3.9+'), ('_2', '~platform==linux'), ('_3', '~arch==x86_64'), ('_4', '~os==RockyLinux-9.7')]), ((('fillcolor', '#AAFFAA'), ('fontsize', 10), ('style', 'filled')), [('_5', 'python-3.11[]')])], 'edges': [((('arrowsize', '0.5'),), [('_1', '_5')])]}",
+    "host": "ip-10-0-12-191.internal.bcnvisuals.com",
+    "implicit_packages": [
+        "~platform==linux",
+        "~arch==x86_64",
+        "~os==RockyLinux-9.7"
+    ],
+    "load_time": 0.0,
+    "num_loaded_packages": 2,
+    "os": "RockyLinux-9.7",
+    "package_caching": false,
+    "package_filter": [],
+    "package_orderers": null,
+    "package_paths": [
+        "/tmp/user_home/rez_packages",
+        "/mnt/studio/pipeline/packages"
+    ],
+    "package_requests": [
+        "python-3.9+"
+    ],
+    "parent_suite_path": null,
+    "patch_locks": {},
+    "platform": "linux",
+    "requested_timestamp": null,
+    "resolved_ephemerals": [],
+    "resolved_packages": [
+        {
+            "key": "filesystem.variant",
+            "variables": {
+                "index": null,
+                "location": "/mnt/studio/pipeline/packages",
+                "name": "python",
+                "repository_type": "filesystem",
+                "version": "3.11"
+            }
+        }
+    ],
+    "rez_path": "/opt/rez/lib64/python3.9/site-packages/rez",
+    "rez_version": "2.114.1",
+    "serialize_version": "4.7",
+    "solve_time": 0.001007080078125,
+    "status": "solved",
+    "suite_context_name": null,
+    "timestamp": 1770308448,
+    "user": "george.antonopoulos@internal.bcnvisuals.com"
+}

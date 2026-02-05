@@ -1,0 +1,65 @@
+{
+    "append_sys_path": true,
+    "arch": "x86_64",
+    "building": false,
+    "caching": true,
+    "created": 1770308453,
+    "default_patch_lock": "no_lock",
+    "failure_description": null,
+    "from_cache": false,
+    "graph": "{'nodes': [((('fillcolor', '#FFFFAA'), ('fontsize', 10), ('style', 'filled,dashed')), [('_1', 'ffmpeg_web'), ('_2', '~platform==linux'), ('_3', '~arch==x86_64'), ('_4', '~os==RockyLinux-9.7')]), ((('fillcolor', '#AAFFAA'), ('fontsize', 10), ('style', 'filled')), [('_5', 'python-3.11[]'), ('_6', 'ffmpeg_web-1.0.0[]')]), ((('fillcolor', '#F6F6F6'), ('fontsize', 10), ('style', 'filled,dashed')), [('_7', 'python-3.9+')])], 'edges': [((('arrowsize', '0.5'),), [('_1', '_6'), ('_6', '_7'), ('_7', '_5')])]}",
+    "host": "ip-10-0-12-191.internal.bcnvisuals.com",
+    "implicit_packages": [
+        "~platform==linux",
+        "~arch==x86_64",
+        "~os==RockyLinux-9.7"
+    ],
+    "load_time": 0.0,
+    "num_loaded_packages": 3,
+    "os": "RockyLinux-9.7",
+    "package_caching": true,
+    "package_filter": [],
+    "package_orderers": null,
+    "package_paths": [
+        "/tmp/george_rez_packages",
+        "/mnt/studio/pipeline/packages"
+    ],
+    "package_requests": [
+        "ffmpeg_web"
+    ],
+    "parent_suite_path": null,
+    "patch_locks": {},
+    "platform": "linux",
+    "requested_timestamp": null,
+    "resolved_ephemerals": [],
+    "resolved_packages": [
+        {
+            "key": "filesystem.variant",
+            "variables": {
+                "index": null,
+                "location": "/mnt/studio/pipeline/packages",
+                "name": "python",
+                "repository_type": "filesystem",
+                "version": "3.11"
+            }
+        },
+        {
+            "key": "filesystem.variant",
+            "variables": {
+                "index": null,
+                "location": "/tmp/george_rez_packages",
+                "name": "ffmpeg_web",
+                "repository_type": "filesystem",
+                "version": "1.0.0"
+            }
+        }
+    ],
+    "rez_path": "/opt/rez/lib64/python3.9/site-packages/rez",
+    "rez_version": "2.114.1",
+    "serialize_version": "4.7",
+    "solve_time": 0.00848245620727539,
+    "status": "solved",
+    "suite_context_name": null,
+    "timestamp": 1770308453,
+    "user": "george.antonopoulos@internal.bcnvisuals.com"
+}

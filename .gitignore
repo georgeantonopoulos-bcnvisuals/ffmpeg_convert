@@ -13,3 +13,4 @@ ffmpeg_ui.log
 /bundled_deps
 /dist
 /build_nuitka
+/ffmpeg_web_bundle
