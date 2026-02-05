@@ -92,36 +92,46 @@ def scan_for_sequences(folder_path: str) -> List[SequenceItem]:
         # Gather all files
         search_pattern = os.path.join(folder_path, "*")
         files = glob.glob(search_pattern)
-        
+
         # Filter for images
-        image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.exr'))]
-        
+        image_files = [
+            f
+            for f in files
+            if f.lower().endswith((".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".exr"))
+        ]
+
         # Assemble sequences
         collections, remainder = clique.assemble(image_files)
-        
-        sequence_items = []
+
+        sequence_items: List[SequenceItem] = []
         for col in collections:
             indexes = list(col.indexes)
             if not indexes:
                 continue
-                
+
             start = min(indexes)
             end = max(indexes)
-            
+
             # Reconstruct pattern: head + %0Xd + tail
-            # Clique padding is the number of digits
+            # Clique gives us full paths in head/tail; the web UI and
+            # ffmpeg handler expect patterns relative to the selected
+            # input folder (filename only), so we strip the directory
+            # portion here.
             padding = col.padding
-            pattern = f"{col.head}%0{padding}d{col.tail}"
-            
+            dir_head = os.path.dirname(col.head)
+            base_head = os.path.basename(col.head)
+
+            pattern = f"{base_head}%0{padding}d{col.tail}"
+
             item = SequenceItem(
-                head=col.head,
+                head=base_head,
                 tail=col.tail,
                 padding=padding,
                 start=start,
                 end=end,
                 count=len(indexes),
                 pattern=pattern,
-                range_string=f"[{start}-{end}]"
+                range_string=f"[{start}-{end}]",
             )
             sequence_items.append(item)
             

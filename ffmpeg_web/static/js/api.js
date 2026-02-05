@@ -38,5 +38,15 @@ const API = {
     async cancelConversion() {
         const res = await fetch('/api/cancel', { method: 'POST' });
         return await res.json();
+    },
+
+    async cleanupTemp() {
+        const res = await fetch('/api/cleanup', { method: 'POST' });
+        return await res.json();
+    },
+
+    async getDeps() {
+        const res = await fetch('/api/deps');
+        return await res.json();
     }
 };

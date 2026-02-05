@@ -138,6 +138,7 @@ class ExrHandler:
         return self.temp_dir
 
     def _process_single_frame(self, cmd_info):
+        """Run ``oiiotool`` for a single frame and return its result tuple."""
         cmd, frame_num = cmd_info
         if self.is_cancelled:
             return (frame_num, -1, "Cancelled")
@@ -160,15 +161,18 @@ class ExrHandler:
             return (frame_num, -1, str(e))
 
     def cancel(self):
+        """Signal all active EXR conversion processes to terminate."""
         self.is_cancelled = True
         for p in self.active_processes:
             try:
                 p.terminate()
-            except:
-                pass
+            except Exception:
+                # Best-effort termination; ignore individual failures.
+                continue
         self.active_processes = []
         
     def cleanup(self):
+        """Remove the temporary directory created for EXR conversion, if any."""
         if self.temp_dir and os.path.exists(self.temp_dir):
             try:
                 shutil.rmtree(self.temp_dir)

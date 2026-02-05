@@ -100,18 +100,32 @@ Create a relocatable directory containing a full Python environment and all bina
 
 ---
 
-## 6. File Structure
+## 6. File Structure (High-Level)
 
 ```
 ffmpeg_convert/
-├── ffmpeg_ui.py           # Main application entry point
-├── ffmpeg_converter.py    # FFmpeg command builder
-├── dark_theme.tcl         # TTK dark theme (color-only, no images)
-├── rounded_buttons.tcl    # Placeholder for compatibility
-├── launch_ffmpeg_UI.sh    # Rez environment launcher (legacy)
-├── launch_ffmpeg_ui.py    # Python-based Rez launcher
-├── ffmpeg_settings.json   # User settings persistence
-└── tmp_files/             # Temporary conversion files
+├── ffmpeg_ui.py              # Tkinter GUI entry point
+├── ffmpeg_converter.py       # Legacy/experimental Qt-based converter
+├── dark_theme.tcl            # TTK dark theme (color-only, no images)
+├── rounded_buttons.tcl       # Placeholder for compatibility
+├── launch_ffmpeg_UI.sh       # Rez environment launcher (legacy, Tkinter)
+├── launch_ffmpeg_ui.py       # Python-based Rez launcher (Tkinter)
+├── ffmpeg_settings.json      # Shared user settings persistence
+├── ffmpeg_web/               # FastAPI + web frontend implementation
+│   ├── main.py               # FastAPI app, WebSocket, job manager
+│   ├── config.py             # Settings load/save helpers
+│   ├── core/
+│   │   ├── ffmpeg_handler.py # FFmpeg command building/execution
+│   │   ├── exr_handler.py    # EXR → PNG via oiiotool + OCIO
+│   │   ├── explorer.py       # File browser + clique sequence detection
+│   │   └── deps.py           # Dependency health checks (/api/deps)
+│   └── static/
+│       ├── index.html        # Single-page web UI
+│       ├── style.css         # Dark, modern styling
+│       └── js/
+│           ├── api.js        # REST/WebSocket API helpers
+│           └── ui.js         # UI logic, logs, file browser, controls
+└── tmp_files/                # Temporary conversion files (Tkinter flow)
 ```
 
 ---
@@ -125,3 +139,19 @@ ffmpeg_convert/
     - Installed `nuitka`, `zstandard`, `clique`, and `patchelf` in the user's `.local` directory.
     - Modified `ffmpeg_ui.py` with `get_resource_path()` helper to correctly resolve bundled data files (themes, icons).
     - Current build is resolving and compiling dependencies from the `openimageio`, `opencolorio`, `tkinter`, and `clique` Rez packages.
+
+### Feb 2026: FastAPI Web UI Port (In Progress)
+- **Goal**: Provide a browser-based UI that mirrors the Tkinter workflow while remaining local-only and studio-friendly.
+- **Backend**:
+  - `ffmpeg_web/main.py` exposes REST endpoints:
+    - `/api/settings` (GET/POST): shared JSON settings.
+    - `/api/browse` and `/api/scan`: server-side file browser and `clique`-based sequence detection.
+    - `/api/convert`, `/api/cancel`, `/api/cleanup`: manage conversion jobs and EXR temp cleanup.
+    - `/api/deps`: reports dependency health (notably `oiiotool` and `clique`) using `core/deps.py`.
+  - WebSocket `/ws/status` streams FFmpeg/EXR logs and progress to the browser.
+- **Frontend**:
+  - `ffmpeg_web/static/index.html` + `style.css` + `js/` implement a dark, modern layout with:
+    - Input/output settings, codec options, and duration controls.
+    - A modal server-side file browser for sequence selection.
+    - A terminal-style log window and progress bar driven by WebSocket updates.
+    - A dependency warning banner that disables conversion if critical tools are missing.

@@ -18,7 +18,10 @@
     <div class="app-container">
         <header>
             <h1>FFmpeg Converter</h1>
-            <div id="status-indicator" class="log-info">Ready</div>
+            <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                <div id="status-indicator" class="log-info">Ready</div>
+                <div id="deps-warning" class="deps-warning hidden"></div>
+            </div>
         </header>
 
         <!-- Input Section -->
@@ -28,7 +31,7 @@
                 <div class="form-group full-width">
                     <label>Input Sequence Folder</label>
                     <div class="input-group">
-                        <input type="text" id="input_folder" readonly placeholder="Select a folder...">
+                        <input type="text" id="input_folder" placeholder="Paste or select a folder path...">
                         <button class="btn btn-secondary" id="browse-btn">Browse</button>
                     </div>
                 </div>

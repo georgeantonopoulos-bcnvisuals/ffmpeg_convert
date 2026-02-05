@@ -204,6 +204,12 @@ select:focus {
 .log-success { color: #69f0ae; }
 .log-info { color: #82b1ff; }
 
+.deps-warning {
+    font-size: 0.8rem;
+    color: var(--error-color);
+    text-align: right;
+}
+
 /* Progress Bar */
 .progress-container {
     background: var(--input-bg);

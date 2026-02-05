@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         progressBar: document.getElementById('progress-bar'),
         logContainer: document.getElementById('log-container'),
         statusIndicator: document.getElementById('status-indicator'),
+        depsWarning: document.getElementById('deps-warning'),
 
         // Modal
         modal: document.getElementById('file-browser-modal'),
@@ -47,6 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         log("Use 'Browse' to select an input sequence folder.", "info");
         await loadSettings();
         setupWebSocket();
+        await checkDependencies();
     }
 
     // --- WebSockets ---
@@ -162,6 +164,27 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.outputFilename.value = dom.outputFilename.value.replace(/\.\w+$/, '.mov');
         } else {
             dom.outputFilename.value = dom.outputFilename.value.replace(/\.\w+$/, '.mov');
+        }
+    }
+
+    async function checkDependencies() {
+        try {
+            const status = await API.getDeps();
+            if (!status.ok) {
+                const issues = Array.isArray(status.issues) ? status.issues.join(' ') : 'Dependency issues detected.';
+                if (dom.depsWarning) {
+                    dom.depsWarning.textContent = issues;
+                    dom.depsWarning.classList.remove('hidden');
+                }
+                dom.runBtn.disabled = true;
+                log(`Dependencies not healthy: ${issues}`, 'error');
+            } else if (dom.depsWarning) {
+                dom.depsWarning.textContent = '';
+                dom.depsWarning.classList.add('hidden');
+                dom.runBtn.disabled = state.isConverting;
+            }
+        } catch (e) {
+            log(`Failed to query dependency status: ${e.message}`, 'error');
         }
     }
 
@@ -324,6 +347,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     dom.stopBtn.addEventListener('click', async () => {
+        log('Stop requested by user...', 'info');
         await API.cancelConversion();
     });
 
