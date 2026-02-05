@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FFmpeg Converter</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <header>
+            <h1>FFmpeg Converter</h1>
+            <div id="status-indicator" class="log-info">Ready</div>
+        </header>
+
+        <!-- Input Section -->
+        <section id="input-section">
+            <h2>Input Settings</h2>
+            <div class="form-grid">
+                <div class="form-group full-width">
+                    <label>Input Sequence Folder</label>
+                    <div class="input-group">
+                        <input type="text" id="input_folder" readonly placeholder="Select a folder...">
+                        <button class="btn btn-secondary" id="browse-btn">Browse</button>
+                    </div>
+                </div>
+
+                <div class="form-group full-width">
+                    <label>Filename Pattern</label>
+                    <input type="text" id="filename_pattern" placeholder="e.g. shot_010_%04d.exr">
+                    <small style="color: grey; font-size: 0.8rem; margin-top: 4px;">Detected: <span
+                            id="detected-range">None</span></small>
+                </div>
+
+                <div class="form-group">
+                    <label>Source FPS</label>
+                    <input type="text" id="source_frame_rate" value="24">
+                </div>
+            </div>
+        </section>
+
+        <!-- Output Section -->
+        <section id="output-section">
+            <h2>Output Settings</h2>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Codec</label>
+                    <select id="codec">
+                        <option value="h265">H.265 (MP4)</option>
+                        <option value="h264">H.264 (MP4)</option>
+                        <option value="prores_422">ProRes 422</option>
+                        <option value="prores_422_lt">ProRes 422 LT</option>
+                        <option value="prores_444">ProRes 4444</option>
+                        <option value="qtrle">QuickTime Animation (QTRLE)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Output FPS</label>
+                    <input type="text" id="frame_rate" value="24">
+                </div>
+
+                <!-- Codec Specifc: MP4 Bitrate -->
+                <div class="form-group codec-option show-mp4">
+                    <label>Bitrate (Mbps)</label>
+                    <input type="number" id="mp4_bitrate" value="30">
+                </div>
+
+                <!-- Codec Specific: ProRes options (hidden by default) -->
+                <div class="form-group codec-option show-prores hidden">
+                    <label>Quality (qscale)</label>
+                    <input type="number" id="prores_qscale" value="9">
+                </div>
+
+                <div class="form-group">
+                    <label>Desired Duration (sec)</label>
+                    <input type="number" id="desired_duration" value="15">
+                </div>
+
+                <div class="form-group">
+                    <label>Audio</label>
+                    <select id="audio_option">
+                        <option value="No Audio">No Audio</option>
+                        <option value="Blank Audio Track">Blank Audio Track</option>
+                    </select>
+                </div>
+
+                <div class="form-group full-width">
+                    <label>Output Folder</label>
+                    <div class="input-group">
+                        <input type="text" id="output_folder" placeholder="Calculated automatically..." readonly>
+                        <!-- <button class="btn btn-secondary">Change</button> -->
+                    </div>
+                </div>
+
+                <div class="form-group full-width">
+                    <label>Output Filename</label>
+                    <input type="text" id="output_filename" value="output.mp4">
+                </div>
+            </div>
+        </section>
+
+        <!-- Action & Logs -->
+        <section id="process-section">
+            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                <button id="run-btn" class="btn btn-primary btn-lg">Run Conversion</button>
+                <button id="stop-btn" class="btn btn-danger btn-lg" disabled>Stop</button>
+            </div>
+
+            <div class="progress-container">
+                <div id="progress-bar" class="progress-bar"></div>
+            </div>
+
+            <div style="margin-top: 15px;">
+                <div id="log-container"></div>
+            </div>
+        </section>
+    </div>
+
+    <!-- File Browser Modal -->
+    <div id="file-browser-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Select Input Folder</h3>
+                <button id="close-modal" class="btn btn-secondary" style="padding: 5px 10px;">✕</button>
+            </div>
+            <div class="modal-header" style="background: var(--bg-color); padding: 10px;">
+                <div style="display: flex; gap: 10px; width: 100%;">
+                    <button id="nav-up" class="btn btn-secondary">↑ Up</button>
+                    <input type="text" id="browser-path" style="flex: 1;" readonly>
+                </div>
+            </div>
+            <div class="modal-body">
+                <ul id="file-list" class="file-list">
+                    <!-- Items injected here -->
+                </ul>
+            </div>
+            <div class="modal-footer">
+                <button id="select-folder-btn" class="btn btn-primary">Select Current Folder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/ui.js"></script>
+</body>
+
+</html>

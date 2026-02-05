@@ -8,3 +8,8 @@ last_input_folder.json
 ffmpeg_settings.json
 ffmpeg_ui.error.log
 ffmpeg_ui.log
+
+/build
+/bundled_deps
+/dist
+/build_nuitka

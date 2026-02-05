@@ -135,6 +135,16 @@ def check_and_install_dependencies():
     print("All dependencies are installed successfully!")
 
 
+def get_resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for Nuitka/PyInstaller """
+    if hasattr(sys, '_MEIPASS'):
+        # PyInstaller
+        return os.path.join(sys._MEIPASS, relative_path)
+    # Nuitka standalone/onefile handles __file__ correctly to point to the temporary directory
+    # or the directory where the binary resides.
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_path, relative_path)
+
 class FFmpegUI:
     def __init__(self, root):
         self.root = root
@@ -144,8 +154,11 @@ class FFmpegUI:
         self.root.minsize(700, 600)    # Set minimum window size
 
         # Create tmp_files directory in script location
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.base_temp_dir = os.path.join(script_dir, "tmp_files")
+        try:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        except OSError:
+            self.script_dir = os.path.abspath(".")
+        self.base_temp_dir = os.path.join(self.script_dir, "tmp_files")
         if not os.path.exists(self.base_temp_dir):
             os.makedirs(self.base_temp_dir)
 
@@ -172,8 +185,9 @@ class FFmpegUI:
         self.queue = queue.Queue()
 
         # Custom font
-        self.custom_font = Font(family="Roboto", size=10)
-        self.title_font = Font(family="Roboto", size=11, weight="bold") # Slightly smaller title for LabelFrames
+        # Use generic font family to avoid potential crashes with missing fonts
+        self.custom_font = Font(family="Helvetica", size=10)
+        self.title_font = Font(family="Helvetica", size=11, weight="bold")
 
         # Set up dark theme
         self._setup_theme()
@@ -318,19 +332,20 @@ class FFmpegUI:
         self.prores_profile = tk.StringVar(value=self.settings.get("prores_profile", DEFAULT_SETTINGS["prores_profile"]))
         self.prores_qscale = tk.StringVar(value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
         self.mp4_bitrate = tk.StringVar(value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]))
+
         # Codec-specific options frames (parent is output_codec_settings_frame)
         # H.264/H.265 Frame
         self.h264_h265_frame = ttk.Frame(output_codec_settings_frame)
-        self.h264_h265_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         self.h264_h265_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
         
         _, self.bitrate_entry = self._create_labeled_entry(self.h264_h265_frame, "Bitrate (Mbps):", row=0, entry_var=self.mp4_bitrate, default_value=self.settings.get("mp4_bitrate", DEFAULT_SETTINGS["mp4_bitrate"]), entry_width=10, bind_event="<FocusOut>", bind_callback=lambda e: self.save_settings())
         
-        # ProRes Frame
+        # Grid H.264/H.265 Frame AFTER adding children
+        self.h264_h265_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
+
+
         # ProRes Frame
         self.prores_frame = ttk.Frame(output_codec_settings_frame)
-        # Grid it on the same row as h264_h265_frame; update_codec will manage visibility
-        self.prores_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         self.prores_frame.grid_columnconfigure(1, weight=1) # Ensure entry column expands
         
         # ProRes Profile Label (not an entry, just text updated by update_codec)
@@ -340,6 +355,8 @@ class FFmpegUI:
         
         _, self.qscale_entry = self._create_labeled_entry(self.prores_frame, "Quality (qscale:v):", row=1, entry_var=self.prores_qscale, default_value=self.settings.get("prores_qscale", DEFAULT_SETTINGS["prores_qscale"]))
         
+        # Grid ProRes Frame AFTER adding children
+        self.prores_frame.grid(row=current_row_output, column=0, columnspan=3, sticky="ew", padx=5, pady=5)
         self.prores_frame.grid_remove() # Initially hidden by default
         # current_row_output += 1 # This row is shared by codec-specific frames
 
@@ -396,8 +413,7 @@ class FFmpegUI:
         self.root.after(100, self.process_queue)
 
         # Load window icon if available
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(script_dir, "ffmpeg_ui_icon.png")
+        icon_path = get_resource_path("ffmpeg_ui_icon.png")
         if os.path.exists(icon_path):
             try:
                 self._icon_img = tk.PhotoImage(file=icon_path)
@@ -534,6 +550,12 @@ class FFmpegUI:
 
         if entry_var is None:
             entry_var = tk.StringVar()
+            if default_value:
+                entry_var.set(str(default_value))
+        elif default_value and not entry_var.get():
+             # If var provided but empty, and default provided, set it.
+             # If var already has value (e.g. from settings), don't overwrite or append.
+             entry_var.set(str(default_value))
         
         entry_options = {'textvariable': entry_var}
         if entry_width is not None:
@@ -543,8 +565,9 @@ class FFmpegUI:
         # The entry always starts at col_offset + columnspan_label
         entry.grid(row=row, column=col_offset + columnspan_label, columnspan=columnspan_entry, sticky=sticky_entry, padx=padx_entry, pady=pady_entry)
         
-        if default_value:
-            entry.insert(0, str(default_value)) # Ensure default is string
+        # Do NOT use entry.insert if we have textvariable, it's redundant and can cause "99" issues.
+        # if default_value:
+        #    entry.insert(0, str(default_value)) 
         
         if bind_event and bind_callback:
             entry.bind(bind_event, bind_callback)

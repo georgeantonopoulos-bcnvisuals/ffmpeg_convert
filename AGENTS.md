@@ -98,8 +98,6 @@ Create a relocatable directory containing a full Python environment and all bina
 
 **Option 1 (PyInstaller One-File)** is the most versatile solution for a studio SMB share. It removes the need for Rez entirely and delivers a "click-and-run" experience for all users regardless of their local machine configuration.
 
-**Alternative**: If the studio already relies heavily on Apptainer, **Option 2** is the most "correct" engineering approach, provided you stop referencing host-side Rez packages and move all logic *inside* the container build.
-
 ---
 
 ## 6. File Structure
@@ -110,8 +108,20 @@ ffmpeg_convert/
 ├── ffmpeg_converter.py    # FFmpeg command builder
 ├── dark_theme.tcl         # TTK dark theme (color-only, no images)
 ├── rounded_buttons.tcl    # Placeholder for compatibility
-├── launch_ffmpeg_UI.sh    # Rez environment launcher
-├── _internal_launcher.sh  # Internal launcher script (called by launch_ffmpeg_UI.sh)
+├── launch_ffmpeg_UI.sh    # Rez environment launcher (legacy)
+├── launch_ffmpeg_ui.py    # Python-based Rez launcher
 ├── ffmpeg_settings.json   # User settings persistence
 └── tmp_files/             # Temporary conversion files
 ```
+
+---
+
+## 7. Development Journal
+
+### Dec 24, 2025: Nuitka Standalone Deployment (In Progress)
+- **Goal**: Create a single-file executable that bundles Python, Tkinter, OIIO, and FFmpeg.
+- **Approach**: Running Nuitka `--standalone --onefile` inside a `rez-env` shell. This is necessary because Nuitka's `tk-inter` plugin requires the `tkinter` module to be detected as part of the primary Python installation, which Rez manages via environment variables.
+- **Progress**: 
+    - Installed `nuitka`, `zstandard`, `clique`, and `patchelf` in the user's `.local` directory.
+    - Modified `ffmpeg_ui.py` with `get_resource_path()` helper to correctly resolve bundled data files (themes, icons).
+    - Current build is resolving and compiling dependencies from the `openimageio`, `opencolorio`, `tkinter`, and `clique` Rez packages.
