@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         browsingPath: "",
         inputFolder: "",
         frameRange: { start: 0, end: 0 },
+        sourceRes: { width: null, height: null },
         isConverting: false
     };
 
@@ -21,6 +22,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         proresQscale: document.getElementById('prores_qscale'),
         desiredDuration: document.getElementById('desired_duration'),
         audioOption: document.getElementById('audio_option'),
+
+        reformatEnabled: document.getElementById('reformat_enabled'),
+        reformatFields: document.getElementById('reformat-fields'),
+        reformatWidth: document.getElementById('reformat_width'),
+        reformatHeight: document.getElementById('reformat_height'),
+        reformatHint: document.getElementById('reformat-hint'),
 
         outputFolder: document.getElementById('output_folder'),
         outputFilename: document.getElementById('output_filename'),
@@ -129,6 +136,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.mp4Bitrate.value = settings.mp4_bitrate || "30";
             dom.proresQscale.value = settings.prores_qscale || "9";
 
+            dom.reformatEnabled.checked = Boolean(settings.reformat_enabled);
+            dom.reformatWidth.value = settings.reformat_width || "";
+            dom.reformatHeight.value = settings.reformat_height || "";
+            updateReformatUI();
+
             if (settings.codec) {
                 dom.codec.value = settings.codec;
                 updateCodecOptions();
@@ -147,9 +159,89 @@ document.addEventListener('DOMContentLoaded', async () => {
             desired_duration: dom.desiredDuration.value,
             codec: dom.codec.value,
             mp4_bitrate: dom.mp4Bitrate.value,
-            prores_qscale: dom.proresQscale.value
+            prores_qscale: dom.proresQscale.value,
+            reformat_enabled: dom.reformatEnabled.checked,
+            reformat_width: dom.reformatWidth.value,
+            reformat_height: dom.reformatHeight.value
         };
         await API.saveSettings(settings);
+    }
+
+    // --- Reformat ---
+    // Mirrors core/reformat.py so the preview always matches what the
+    // backend will actually do. Rounding up (never down) means the output
+    // is never smaller than what was asked for, and even dimensions are
+    // mandatory for yuv420p chroma subsampling.
+    function evenUp(value) {
+        const rounded = Math.round(value);
+        if (rounded < 2) return 2;
+        return rounded + (rounded % 2);
+    }
+
+    function parseDimension(field) {
+        const raw = field.value.trim();
+        if (raw === "") return null;
+        const value = parseInt(raw, 10);
+        return Number.isFinite(value) ? value : NaN;
+    }
+
+    function resolveDimensions(reqW, reqH, srcW, srcH) {
+        if (Number.isNaN(reqW) || Number.isNaN(reqH)) {
+            return { error: "Width and height must be whole numbers." };
+        }
+        if ((reqW !== null && reqW <= 0) || (reqH !== null && reqH <= 0)) {
+            return { error: "Width and height must be positive numbers." };
+        }
+        if (reqW === null && reqH === null) {
+            return { error: "Enter a width, a height, or both." };
+        }
+        if (reqW !== null && reqH !== null) {
+            return { width: evenUp(reqW), height: evenUp(reqH) };
+        }
+        if (!srcW || !srcH) {
+            return { unknownSource: true };
+        }
+        if (reqW !== null) {
+            return { width: evenUp(reqW), height: evenUp(reqW * srcH / srcW) };
+        }
+        return { width: evenUp(reqH * srcW / srcH), height: evenUp(reqH) };
+    }
+
+    function updateReformatUI() {
+        const enabled = dom.reformatEnabled.checked;
+        dom.reformatFields.classList.toggle('hidden', !enabled);
+        if (!enabled) return;
+
+        const reqW = parseDimension(dom.reformatWidth);
+        const reqH = parseDimension(dom.reformatHeight);
+        const { width: srcW, height: srcH } = state.sourceRes;
+        const result = resolveDimensions(reqW, reqH, srcW, srcH);
+
+        dom.reformatHint.classList.remove('is-error');
+
+        if (result.error) {
+            dom.reformatHint.classList.add('is-error');
+            dom.reformatHint.textContent = result.error;
+            return;
+        }
+
+        if (result.unknownSource) {
+            dom.reformatHint.textContent =
+                "Source resolution unknown \u2014 the missing dimension will be " +
+                "derived from the source aspect ratio at conversion time.";
+            return;
+        }
+
+        const source = (srcW && srcH) ? `Source: ${srcW} \u00d7 ${srcH} \u2192 ` : "";
+        dom.reformatHint.innerHTML =
+            `${source}Output: <strong>${result.width} \u00d7 ${result.height}</strong>`;
+
+        const snapped = (reqW !== null && reqW !== result.width)
+            || (reqH !== null && reqH !== result.height);
+        if (snapped) {
+            dom.reformatHint.innerHTML +=
+                " \u2014 rounded up to even (required for 4:2:0 chroma).";
+        }
     }
 
     function updateCodecOptions() {
@@ -252,6 +344,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                 log("No image sequences detected.", 'error');
                 dom.filenamePattern.value = "";
                 dom.detectedRange.textContent = "None";
+                state.sourceRes = { width: null, height: null };
+                updateReformatUI();
                 return;
             }
 
@@ -259,7 +353,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             const seq = sequences[0];
             dom.filenamePattern.value = seq.pattern;
             state.frameRange = { start: seq.start, end: seq.end };
+            state.sourceRes = { width: seq.width || null, height: seq.height || null };
             dom.detectedRange.textContent = seq.range_string;
+            if (seq.width && seq.height) {
+                dom.detectedRange.textContent += ` \u2014 ${seq.width} \u00d7 ${seq.height}`;
+            }
+            updateReformatUI();
 
             // Auto-set output filename
             const seqName = seq.head.replace(/[._]$/, "");
@@ -302,10 +401,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     dom.codec.addEventListener('change', updateCodecOptions);
 
+    dom.reformatEnabled.addEventListener('change', () => {
+        updateReformatUI();
+        saveCurrentSettings();
+    });
+    [dom.reformatWidth, dom.reformatHeight].forEach(field => {
+        field.addEventListener('input', updateReformatUI);
+        field.addEventListener('change', saveCurrentSettings);
+    });
+
     dom.runBtn.addEventListener('click', async () => {
         if (!dom.inputFolder.value || !dom.outputFolder.value) {
             alert("Please select input and output folders.");
             return;
+        }
+
+        if (dom.reformatEnabled.checked) {
+            const check = resolveDimensions(
+                parseDimension(dom.reformatWidth),
+                parseDimension(dom.reformatHeight),
+                state.sourceRes.width,
+                state.sourceRes.height
+            );
+            if (check.error) {
+                alert(`Reformat: ${check.error}`);
+                return;
+            }
         }
 
         const config = {
@@ -322,7 +443,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             prores_qscale: dom.proresQscale.value,
             audio_option: dom.audioOption.value,
             start_frame: state.frameRange.start,
-            end_frame: state.frameRange.end
+            end_frame: state.frameRange.end,
+            reformat_enabled: dom.reformatEnabled.checked,
+            reformat_width: parseDimension(dom.reformatWidth),
+            reformat_height: parseDimension(dom.reformatHeight)
         };
 
         if (dom.codec.value.startsWith('prores')) {

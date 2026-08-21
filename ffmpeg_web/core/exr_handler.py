@@ -2,8 +2,49 @@ import os
 import subprocess
 import shutil
 import time
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
+
+from . import reformat
+
+
+def build_frame_command(
+    input_file: str,
+    output_file: str,
+    ocio_config: str,
+    color_space: str,
+    size: Optional[Tuple[int, int]],
+) -> List[str]:
+    """Build the oiiotool command that converts a single EXR frame.
+
+    When a size is given the resize is inserted after ``--ch`` (so only
+    the three channels we keep are filtered) and before
+    ``--colorconvert`` (so the filtering happens on scene-linear float
+    data, ahead of the sRGB transform and the 8-bit quantisation).
+    Resizing display-referred 8-bit pixels instead would bake the
+    transfer curve into the filter weights and quantise twice.
+    """
+    cmd = [
+        "oiiotool",
+        "-v",
+        "--colorconfig", ocio_config,
+        "--threads", "1",
+        input_file,
+        "--ch", "R,G,B",
+    ]
+
+    if size is not None:
+        cmd += [reformat.OIIO_RESIZE_ARG, f"{size[0]}x{size[1]}"]
+
+    cmd += [
+        "--colorconvert", color_space, "Output - sRGB",
+        "-d", "uint8",
+        "--compression", "none",
+        "--no-clobber",
+        "-o", output_file,
+    ]
+    return cmd
+
 
 class ExrHandler:
     def __init__(self, log_callback: Callable[[str, str], None]):
@@ -19,11 +60,15 @@ class ExrHandler:
                            input_folder: str, 
                            pattern: str, 
                            start_frame: int, 
-                           end_frame: int, 
-                           color_space: str = "ACES - ACEScg") -> str:
+                           end_frame: int,
+                           color_space: str = "ACES - ACEScg",
+                           size: Optional[Tuple[int, int]] = None) -> str:
         """
         Convert EXR sequence to PNGs in a temp directory.
         Returns the path to the temp directory on success, or empty string on failure.
+
+        If ``size`` is given the frames are also resized to it, in linear
+        float, as part of the same oiiotool invocation.
         """
         self.is_cancelled = False
         self.active_processes = []
@@ -81,19 +126,9 @@ class ExrHandler:
                 self.log_callback('error', f"Input frame missing: {input_file}")
                 return ""
 
-            cmd = [
-                "oiiotool",
-                "-v",
-                "--colorconfig", self.ocio_config,
-                "--threads", "1",
-                input_file,
-                "--ch", "R,G,B",
-                "--colorconvert", color_space, "Output - sRGB",
-                "-d", "uint8",
-                "--compression", "none",
-                "--no-clobber",
-                "-o", output_file
-            ]
+            cmd = build_frame_command(
+                input_file, output_file, self.ocio_config, color_space, size
+            )
             cmds.append((cmd, frame))
 
         if not cmds:

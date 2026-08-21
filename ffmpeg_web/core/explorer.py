@@ -4,6 +4,8 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import sys
 
+from . import reformat
+
 # Try to import clique, but handle if it's not present (though it should be via Rez)
 try:
     import clique
@@ -31,6 +33,8 @@ class SequenceItem(BaseModel):
     count: int
     pattern: str
     range_string: str
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 def get_directory_contents(path: str = None) -> BrowseResponse:
     """List contents of a directory."""
@@ -104,6 +108,7 @@ def scan_for_sequences(folder_path: str) -> List[SequenceItem]:
         collections, remainder = clique.assemble(image_files)
 
         sequence_items: List[SequenceItem] = []
+        _first_frames: List[str] = []
         for col in collections:
             indexes = list(col.indexes)
             if not indexes:
@@ -134,7 +139,20 @@ def scan_for_sequences(folder_path: str) -> List[SequenceItem]:
                 range_string=f"[{start}-{end}]",
             )
             sequence_items.append(item)
+            _first_frames.append(
+                os.path.join(dir_head, f"{base_head}{start:0{padding}d}{col.tail}")
+            )
             
+        # Probe ONLY the sequence the UI actually uses (the first one).
+        # Probing every sequence spawned one oiiotool per collection inside
+        # this request, which stalls badly on folders holding many
+        # sequences. One header-only read is cheap; N of them is not.
+        if sequence_items:
+            source_size = reformat.probe_resolution(_first_frames[0])
+            if source_size:
+                sequence_items[0].width = source_size[0]
+                sequence_items[0].height = source_size[1]
+
         return sequence_items
         
     except Exception as e:

@@ -15,6 +15,28 @@ This application is a Python-based Graphical User Interface (GUI) for **FFmpeg**
   - **`clique`**: A Python library for parsing and assembling file sequences.
   - **OCIO**: OpenColorIO configuration (currently hardcoded to `/mnt/studio/config/ocio/aces_1.2/config.ocio`).
 
+### ⚠️ DEPLOYMENT TOPOLOGY — READ BEFORE CHANGING ANYTHING
+
+**This repo is NOT what users launch.** Editing `ffmpeg_convert/` and its local
+`ffmpeg_web_bundle/` changes nothing for users. Verify the deployment target
+before scoping any work.
+
+| Thing | Path | Notes |
+| :--- | :--- | :--- |
+| **Live web UI (what users run)** | `/mnt/studio/pipeline/packages/ffmpeg_web_bundle` | Separate git repo: `github.com/georgeantonopoulos-bcnvisuals/ffmpeg_web_bundle` |
+| **Edit here to change it** | `/mnt/studio/pipeline/packages/ffmpeg_web_worktree` | git worktree of that repo |
+| **Deploy script** | `ffmpeg_web_worktree/sync_to_bundle.sh` | rsyncs `packages/ffmpeg_web/1.0.0/{python,bin,lib}` into the live bundle |
+| **This dev repo** | `/mnt/production/user/.../DEV/ffmpeg_convert` | Different lineage; `ffmpeg_web_bundle/` here is a local build artifact only |
+| **Tkinter app (legacy)** | rez pkg `ffmpeg_UI`, via `ayon/launch_scripts/launch_ffmpeg_ui.sh` | Superseded by the web UI. Its deployed copy is months behind this repo. |
+
+**The two web lineages have diverged.** The studio worktree carries features this
+repo lacks (CUDA/NVENC via `hwupload_cuda`, VLC playback, open-output-folder,
+`static/images/`). **Never rsync this repo over the worktree** — port changes into
+it and reconcile by hand.
+
+Note the launcher named `launch_ffmpeg_ui.sh` starts the *legacy Tkinter* app, not
+the web UI. Do not infer which app is current from a script's name.
+
 ### Current Challenges
 1. **Rez & SMB2 Symlink Limitation**: The current Rez-based setup relies on filesystem symbolic links for package resolution. SMB2 network shares (especially when configured for cross-platform compatibility) often do not support symlinks, causing Rez envs to fail.
 2. **Dependency Complexity**: The app requires specific versions of FFmpeg and OpenImageIO libraries. Relying on "host" libraries across different machines (Rocky 9.4, Rocky 9.6, Ubuntu, etc.) leads to `libOpenImageIO.so` not found or GLIBC version mismatch errors.
@@ -118,6 +140,7 @@ ffmpeg_convert/
 │   │   ├── ffmpeg_handler.py # FFmpeg command building/execution
 │   │   ├── exr_handler.py    # EXR → PNG via oiiotool + OCIO
 │   │   ├── explorer.py       # File browser + clique sequence detection
+│   │   ├── reformat.py       # Output resolution: probe, aspect math, filter settings
 │   │   └── deps.py           # Dependency health checks (/api/deps)
 │   └── static/
 │       ├── index.html        # Single-page web UI
@@ -155,3 +178,31 @@ ffmpeg_convert/
     - A modal server-side file browser for sequence selection.
     - A terminal-style log window and progress bar driven by WebSocket updates.
     - A dependency warning banner that disables conversion if critical tools are missing.
+
+### Aug 2026: Output Reformat (Resolution) Support
+- **Goal**: Let a conversion output any resolution without softening the image
+  or introducing aliasing.
+- **UI**: A `Reformat Resolution` checkbox in *Output Settings*, off by default.
+  Ticking it reveals Width and Height fields; leaving either blank derives it
+  from the source aspect ratio. A live hint shows `Source: W x H -> Output: W x H`.
+- **Two resize paths**, chosen by input type:
+  - **EXR** sequences resize inside the existing `oiiotool` pre-pass, via
+    `--resize:filter=lanczos3:highlightcomp=1`, inserted after `--ch R,G,B` and
+    **before** `--colorconvert`. Filtering therefore happens on scene-linear
+    ACEScg float, ahead of the sRGB transform and 8-bit quantisation;
+    `highlightcomp` prevents bright HDR pixels ringing into dark halos.
+  - **Everything else** extends the *existing* trailing `scale` filter (which
+    previously only tagged the BT.709 matrix) with
+    `w=..:h=..:flags=lanczos+accurate_rnd+full_chroma_int`, so a reformat costs
+    one swscale pass rather than adding a second.
+- **Double-resize guard**: the EXR pre-pass mutates the job config to point at
+  its temp PNGs; it now also clears `reformat_enabled`, so FFmpeg does not
+  resample frames oiiotool already resized.
+- **Even dimensions**: all sizes are rounded *up* to even. `yuv420p` subsamples
+  chroma 2:1 in both axes, so an odd dimension is a hard encoder failure.
+- **Source resolution** is probed with `oiiotool --info` (header-only read,
+  falling back to `ffmpeg -i`). `/api/scan` returns it per sequence so the UI can
+  preview the derived dimension; the backend always re-probes and never trusts
+  the client's numbers.
+- **Tests**: `python -m ffmpeg_web.test_reformat` (23 cases, no server or test
+  framework required).

@@ -14,12 +14,36 @@ from typing import Any, Dict
 
 
 def _check_oiiotool() -> Dict[str, Any]:
-    """Check if ``oiiotool`` is available on the current PATH."""
+    """Check that ``oiiotool`` exists and can load its runtime libraries."""
     path = shutil.which("oiiotool")
-    return {
-        "available": path is not None,
+    info: Dict[str, Any] = {
+        "available": False,
         "path": path,
+        "version": None,
+        "error": None,
     }
+    if path is None:
+        return info
+
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        info["error"] = str(exc)
+        return info
+
+    output = (result.stdout or result.stderr).strip()
+    if result.returncode == 0:
+        info["available"] = True
+        info["version"] = output
+    else:
+        info["error"] = output or f"oiiotool exited with code {result.returncode}"
+    return info
 
 
 def _ensure_clique_import() -> Dict[str, Any]:
@@ -94,7 +118,8 @@ def check_dependencies(install_missing: bool = False) -> Dict[str, Any]:
     # --- oiiotool ---
     oiiotool_info = _check_oiiotool()
     if not oiiotool_info["available"]:
-        issues.append("oiiotool not found on PATH; EXR conversion is unavailable.")
+        detail = oiiotool_info.get("error") or "not found on PATH"
+        issues.append(f"oiiotool is unavailable: {detail}; EXR conversion is disabled.")
 
     # --- clique ---
     clique_info = _ensure_clique_import()
@@ -122,4 +147,3 @@ def check_dependencies(install_missing: bool = False) -> Dict[str, Any]:
         },
     }
     return status
-

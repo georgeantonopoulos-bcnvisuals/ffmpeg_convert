@@ -36,7 +36,9 @@ rez-bundle -n "$CONTEXT_FILE" "../$BUNDLE_NAME"
 cat << 'EOF' > "../$BUNDLE_NAME/run.sh"
 #!/bin/bash
 # run.sh - Standalone launcher for the bundled ffmpeg_web app
-BUNDLE_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+# Get the absolute path to the bundle directory robustly
+# We use python3 to resolve the path because the shell's getcwd() might be stale
+BUNDLE_DIR=$(python3 -c "import os; print(os.path.dirname(os.path.realpath('${BASH_SOURCE[0]}')))")
 
 # 1. Setup environment paths using the bundled packages
 # ffmpeg_web-1.0.0 is the main package
@@ -46,11 +48,17 @@ export PATH="$PKG_ROOT/bin:$PATH"
 export PYTHONPATH="$PKG_ROOT/python:$PYTHONPATH"
 
 echo "Launching FFmpeg Web UI from bundle..."
+echo "Bundle directory: $BUNDLE_DIR"
 echo "Uvicorn logs will follow:"
 exec python3 -m uvicorn ffmpeg_web.main:app --host "0.0.0.0" --port "8000" "$@"
 EOF
 
 chmod +x "../$BUNDLE_NAME/run.sh"
+
+# Prove the bundled oiiotool starts without inheriting workstation library
+# paths.  The wrapper adds only its private runtime.
+env -i PATH=/usr/bin:/bin HOME=/tmp \
+    "../$BUNDLE_NAME/packages/ffmpeg_web/1.0.0/bin/oiiotool" --version
 
 echo "--------------------------------------------------"
 echo "Bundle created successfully in $BUNDLE_NAME"

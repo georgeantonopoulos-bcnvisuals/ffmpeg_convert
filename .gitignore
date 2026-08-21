@@ -14,3 +14,8 @@ ffmpeg_ui.log
 /dist
 /build_nuitka
 /ffmpeg_web_bundle
+
+# Archived failed build attempts, stray logs and legacy scripts
+_archive/
+__pycache__/
+*.pyc

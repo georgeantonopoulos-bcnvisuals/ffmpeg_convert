@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FFmpeg Converter</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=3">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -96,6 +96,30 @@
                     </select>
                 </div>
 
+                <!-- Reformat: off by default, reveals width/height when ticked -->
+                <div class="form-group full-width">
+                    <label class="checkbox-label" for="reformat_enabled">
+                        <input type="checkbox" id="reformat_enabled">
+                        <span>Reformat Resolution</span>
+                    </label>
+
+                    <div id="reformat-fields" class="reformat-fields hidden">
+                        <div class="form-group">
+                            <label for="reformat_width">Width</label>
+                            <input type="number" id="reformat_width" min="2" step="2"
+                                placeholder="e.g. 1920">
+                        </div>
+                        <div class="form-group">
+                            <label for="reformat_height">Height</label>
+                            <input type="number" id="reformat_height" min="2" step="2"
+                                placeholder="auto (keeps aspect)">
+                        </div>
+                        <p id="reformat-hint" class="reformat-hint">
+                            Leave one field blank to derive it from the source aspect ratio.
+                        </p>
+                    </div>
+                </div>
+
                 <div class="form-group full-width">
                     <label>Output Folder</label>
                     <div class="input-group">
@@ -153,8 +177,8 @@
     </div>
 
     <!-- Scripts -->
-    <script src="/static/js/api.js"></script>
-    <script src="/static/js/ui.js"></script>
+    <script src="/static/js/api.js?v=3"></script>
+    <script src="/static/js/ui.js?v=3"></script>
 </body>
 
 </html>

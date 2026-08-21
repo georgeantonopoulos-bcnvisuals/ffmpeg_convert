@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from . import config
-from .core import explorer
+from .core import explorer, reformat
 from .core.deps import check_dependencies
 from .core.ffmpeg_handler import FFmpegHandler, FFmpegJobConfig
 from .core.exr_handler import ExrHandler
@@ -29,6 +29,22 @@ if not os.path.exists(STATIC_DIR):
     os.makedirs(STATIC_DIR)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def _revalidate_static(request, call_next):
+    """Force browsers to revalidate /static instead of trusting a heuristic.
+
+    StaticFiles already emits an ETag, but without Cache-Control a browser
+    may serve a stale copy without asking.  That silently shipped an old
+    ui.js to users after a deploy, so we make revalidation explicit: an
+    unchanged file still costs only a 304.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
 
 # Cached dependency status populated at startup.
 DEPENDENCY_STATUS: Dict[str, Any] = {
@@ -134,6 +150,40 @@ class JobManager:
         )
         self.current_thread.start()
 
+    def _resolve_exr_reformat_size(
+        self, job_config: FFmpegJobConfig
+    ) -> Optional[tuple]:
+        """Resolve the target size for the EXR pre-pass, or None if disabled.
+
+        Raises:
+            reformat.ReformatError: if the request cannot be satisfied.
+        """
+        if not job_config.reformat_enabled:
+            return None
+
+        first_frame = reformat.first_frame_path(
+            job_config.input_folder,
+            job_config.filename_pattern,
+            job_config.start_frame,
+        )
+        source = reformat.probe_resolution(first_frame)
+        source_width, source_height = source if source else (None, None)
+
+        size = reformat.resolve_dimensions(
+            job_config.reformat_width,
+            job_config.reformat_height,
+            source_width,
+            source_height,
+        )
+
+        origin = f"{source_width}x{source_height}" if source else "source"
+        self._log_callback(
+            "output",
+            f"Reformatting {origin} -> {size[0]}x{size[1]} in linear float "
+            "(lanczos3, highlight-compensated).\n",
+        )
+        return size
+
     def _run_job_thread(self, job_config: FFmpegJobConfig, is_exr: bool) -> None:
         """Execute the EXR pre-pass (if any) and FFmpeg conversion."""
         import os as _os  # Local import to avoid polluting module namespace.
@@ -146,11 +196,19 @@ class JobManager:
                 self._log_callback("output", "Starting EXR Conversion Phase...\n")
                 exr_phase_started = True
 
+                try:
+                    exr_size = self._resolve_exr_reformat_size(job_config)
+                except reformat.ReformatError as exc:
+                    self._log_callback("error", str(exc))
+                    self.is_running = False
+                    return
+
                 temp_dir = self.exr_handler.convert_exr_sequence(
                     input_folder=job_config.input_folder,
                     pattern=job_config.filename_pattern,
                     start_frame=job_config.start_frame,
                     end_frame=job_config.end_frame,
+                    size=exr_size,
                 )
 
                 if not temp_dir or self.exr_handler.is_cancelled:
@@ -165,6 +223,11 @@ class JobManager:
                 prefix = job_config.filename_pattern.split("%")[0]
                 job_config.input_folder = temp_dir
                 job_config.filename_pattern = f"{prefix}%04d.png"
+
+                # oiiotool has already produced frames at the target size,
+                # so the FFmpeg pass must not resample them a second time.
+                if exr_size is not None:
+                    job_config.reformat_enabled = False
 
                 self._log_callback(
                     "output", "EXR Phase Complete. Starting FFmpeg Phase...\n"

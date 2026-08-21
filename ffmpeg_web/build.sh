@@ -38,16 +38,56 @@ echo "Bundling pip dependencies to $PYTHON_DIR..."
     clique \
     --target "$PYTHON_DIR"
 
-# 4. Bundle ffmpeg binary manually since Rez package is broken
-echo "Bundling ffmpeg binary..."
+# 4. Bundle binaries and an isolated oiiotool runtime.
+echo "Bundling binaries and the complete oiiotool runtime..."
+BIN_DIR="$REZ_BUILD_INSTALL_PATH/bin"
+LIB_DIR="$REZ_BUILD_INSTALL_PATH/lib"
+mkdir -p "$BIN_DIR"
+mkdir -p "$LIB_DIR"
+
 FFMPEG_SRC="/mnt/studio/pipeline/packages/ffmpeg/4.2.2+local.1.0.0/platform-linux/arch-x86_64/ffmpeg"
+OIIO_ROOT="/mnt/studio/pipeline/packages/openimageio/2.4.15.0"
+OIIOTOOL_SRC="$OIIO_ROOT/bin/oiiotool"
+OIIO_LIBS="$OIIO_ROOT/lib64"
+OCIO_LIBS="/mnt/studio/pipeline/packages/opencolorio/2.3.1/lib64"
+RUNTIME_LIB_ROOT="${OIIO_RUNTIME_LIB_ROOT:-/lib64}"
+RUNTIME_BUNDLER="$REZ_BUILD_SOURCE_PATH/../scripts/bundle_oiio_runtime.py"
+
 if [ -f "$FFMPEG_SRC" ]; then
     cp "$FFMPEG_SRC" "$BIN_DIR/ffmpeg"
     chmod +x "$BIN_DIR/ffmpeg"
-else
-    echo "Warning: Could not find ffmpeg binary at $FFMPEG_SRC, falling back to system ffmpeg"
-    cp "$(which ffmpeg)" "$BIN_DIR/ffmpeg"
 fi
+
+if [ -f "$OIIOTOOL_SRC" ]; then
+    cp "$OIIOTOOL_SRC" "$BIN_DIR/oiiotool.real"
+    chmod +x "$BIN_DIR/oiiotool.real"
+
+    "$PYTHON_EXE" "$RUNTIME_BUNDLER" \
+        --executable "$BIN_DIR/oiiotool.real" \
+        --output-dir "$LIB_DIR" \
+        --search-dir "$OIIO_LIBS" \
+        --search-dir "$OCIO_LIBS" \
+        --search-dir "$RUNTIME_LIB_ROOT" \
+        --search-dir /lib64 \
+        --search-dir /usr/lib64 \
+        --manifest "$REZ_BUILD_INSTALL_PATH/oiio-runtime-manifest.txt"
+
+    cat > "$BIN_DIR/oiiotool" << 'EOF'
+#!/bin/bash
+set -e
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export LD_LIBRARY_PATH="$BIN_DIR/../lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$BIN_DIR/oiiotool.real" "$@"
+EOF
+    chmod +x "$BIN_DIR/oiiotool"
+else
+    echo "ERROR: oiiotool was not found at $OIIOTOOL_SRC" >&2
+    exit 1
+fi
+
+# This must execute the binary, not merely find it on PATH.  It catches
+# missing transitive libraries before a package is distributed.
+env -i PATH=/usr/bin:/bin HOME=/tmp "$BIN_DIR/oiiotool" --version
 
 # 5. Create a launcher script in bin directory
 LAUNCHER_PATH="$BIN_DIR/ffmpeg-web-ui"

@@ -3,9 +3,40 @@ import subprocess
 import threading
 import re
 import asyncio
-from typing import Optional, Callable
+from typing import Optional, Callable, Tuple
 from pydantic import BaseModel
+from . import reformat
 from .utils import normalize_fps, calculate_duration_and_frames
+
+
+def build_video_filter_chain(
+    scale_factor: float,
+    out_ffmpeg_fps_str: str,
+    size: Optional[Tuple[int, int]],
+) -> str:
+    """Build the ``-vf`` chain: retime, resample to CFR, then scale.
+
+    When ``size`` is None the trailing ``scale`` filter carries only the
+    colour matrix, exactly as it always has -- it tags BT.709 without
+    resizing.  When a size is given the same filter gains the dimensions
+    and the tuned resampler flags, so a reformat costs one swscale pass
+    rather than adding a second one.
+
+    A height of ``-2`` is ffmpeg's own "derive from the source aspect
+    ratio and round to a multiple of two" sentinel, and passes through
+    untouched.
+    """
+    setpts_filter = f"setpts={scale_factor:.10f}*PTS"
+
+    scale_options = []
+    if size is not None:
+        width, height = size
+        scale_options += [f"w={width}", f"h={height}", f"flags={reformat.SWS_FLAGS}"]
+    scale_options += ["in_color_matrix=bt709", "out_color_matrix=bt709"]
+
+    scale_filter = "scale=" + ":".join(scale_options)
+    return f"{setpts_filter},fps={out_ffmpeg_fps_str},{scale_filter}"
+
 
 class FFmpegJobConfig(BaseModel):
     input_folder: str
@@ -22,6 +53,9 @@ class FFmpegJobConfig(BaseModel):
     audio_option: str = "No Audio"
     start_frame: int
     end_frame: int
+    reformat_enabled: bool = False
+    reformat_width: Optional[int] = None
+    reformat_height: Optional[int] = None
 
 class FFmpegHandler:
     def __init__(self, log_callback: Callable[[str, str], None]):
@@ -33,6 +67,59 @@ class FFmpegHandler:
         self.log_callback = log_callback
         self.process: Optional[subprocess.Popen] = None
         self.is_cancelled = False
+
+    def _resolve_reformat_size(
+        self, config: FFmpegJobConfig
+    ) -> Optional[Tuple[int, int]]:
+        """Work out the target pixel size for this job, or None if disabled.
+
+        The source resolution is probed from the job's own first frame --
+        never taken from the client -- so the size the encoder gets is
+        always derived from the pixels it is about to read.
+
+        If probing fails but only one dimension was requested, ffmpeg's
+        own ``-2`` sentinel handles the aspect ratio for us, so a probe
+        failure degrades instead of aborting the job.
+        """
+        if not config.reformat_enabled:
+            return None
+
+        first_frame = reformat.first_frame_path(
+            config.input_folder, config.filename_pattern, config.start_frame
+        )
+        source = reformat.probe_resolution(first_frame)
+
+        if source is None:
+            if config.reformat_width and not config.reformat_height:
+                self.log_callback(
+                    'output',
+                    "Could not probe the source resolution; letting FFmpeg "
+                    "derive the height from the source aspect ratio.\n",
+                )
+                return reformat.even(config.reformat_width), -2
+            if config.reformat_height and not config.reformat_width:
+                self.log_callback(
+                    'output',
+                    "Could not probe the source resolution; letting FFmpeg "
+                    "derive the width from the source aspect ratio.\n",
+                )
+                return -2, reformat.even(config.reformat_height)
+
+        source_width, source_height = source if source else (None, None)
+        size = reformat.resolve_dimensions(
+            config.reformat_width,
+            config.reformat_height,
+            source_width,
+            source_height,
+        )
+
+        if source:
+            self.log_callback(
+                'output',
+                f"Reformatting {source_width}x{source_height} -> "
+                f"{size[0]}x{size[1]} (lanczos).\n",
+            )
+        return size
 
     def run_ffmpeg(self, config: FFmpegJobConfig):
         """Build and execute FFmpeg command."""
@@ -104,9 +191,16 @@ class FFmpegHandler:
 
         # Filters
         cmd += ["-fps_mode", "cfr"]
-        
-        setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-        ffmpeg_filters_str = f"{setpts_filter},fps={out_ffmpeg_fps_str},scale=in_color_matrix=bt709:out_color_matrix=bt709"
+
+        try:
+            reformat_size = self._resolve_reformat_size(config)
+        except reformat.ReformatError as exc:
+            self.log_callback('error', str(exc))
+            return
+
+        ffmpeg_filters_str = build_video_filter_chain(
+            scale_factor, out_ffmpeg_fps_str, reformat_size
+        )
         cmd += ["-vf", ffmpeg_filters_str]
 
         # Codec & Pixel Format

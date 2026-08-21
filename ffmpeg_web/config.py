@@ -13,7 +13,10 @@ DEFAULT_SETTINGS = {
     "codec": "h265",
     "mp4_bitrate": "30",
     "prores_profile": "2",  # 422
-    "prores_qscale": "9"
+    "prores_qscale": "9",
+    "reformat_enabled": False,
+    "reformat_width": "",
+    "reformat_height": ""
 }
 
 def load_settings() -> Dict[str, Any]:
