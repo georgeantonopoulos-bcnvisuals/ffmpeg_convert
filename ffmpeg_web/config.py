@@ -14,6 +14,8 @@ DEFAULT_SETTINGS = {
     "mp4_bitrate": "30",
     "prores_profile": "2",  # 422
     "prores_qscale": "9",
+    "output_filename": "output.mp4",
+    "output_filename_custom": False,
     "reformat_enabled": False,
     "reformat_width": "",
     "reformat_height": ""

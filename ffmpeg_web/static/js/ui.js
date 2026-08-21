@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         inputFolder: "",
         frameRange: { start: 0, end: 0 },
         sourceRes: { width: null, height: null },
+        filenameCustom: false,
         isConverting: false
     };
 
@@ -139,6 +140,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.reformatEnabled.checked = Boolean(settings.reformat_enabled);
             dom.reformatWidth.value = settings.reformat_width || "";
             dom.reformatHeight.value = settings.reformat_height || "";
+
+            if (settings.output_filename) {
+                dom.outputFilename.value = settings.output_filename;
+            }
+            state.filenameCustom = Boolean(settings.output_filename_custom);
             updateReformatUI();
 
             if (settings.codec) {
@@ -160,6 +166,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             codec: dom.codec.value,
             mp4_bitrate: dom.mp4Bitrate.value,
             prores_qscale: dom.proresQscale.value,
+            output_filename: dom.outputFilename.value,
+            output_filename_custom: state.filenameCustom,
             reformat_enabled: dom.reformatEnabled.checked,
             reformat_width: dom.reformatWidth.value,
             reformat_height: dom.reformatHeight.value
@@ -360,10 +368,16 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             updateReformatUI();
 
-            // Auto-set output filename
-            const seqName = seq.head.replace(/[._]$/, "");
-            const ext = dom.outputFilename.value.match(/\.\w+$/)[0];
-            dom.outputFilename.value = `${seqName}${ext}`;
+            // Auto-name the output after the sequence, but never overwrite a
+            // name the user typed themselves -- having a custom delivery name
+            // clobbered on every folder pick is exactly the retyping this is
+            // meant to stop. Guard the extension match too: a filename with no
+            // extension used to throw here and abort the scan.
+            if (!state.filenameCustom) {
+                const seqName = seq.head.replace(/[._]$/, "");
+                const extMatch = dom.outputFilename.value.match(/\.\w+$/);
+                dom.outputFilename.value = `${seqName}${extMatch ? extMatch[0] : ".mp4"}`;
+            }
 
             log(`Detected sequence: ${seq.pattern} ${seq.range_string}`, 'success');
 
@@ -400,6 +414,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     dom.codec.addEventListener('change', updateCodecOptions);
+
+    // Typing in the filename marks it as the user's own, so folder
+    // selection stops renaming it. Persisted, so it survives a restart.
+    dom.outputFilename.addEventListener('input', () => {
+        state.filenameCustom = true;
+    });
+    dom.outputFilename.addEventListener('change', saveCurrentSettings);
 
     dom.reformatEnabled.addEventListener('change', () => {
         updateReformatUI();
