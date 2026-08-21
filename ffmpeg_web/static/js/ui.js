@@ -320,13 +320,42 @@ document.addEventListener('DOMContentLoaded', async () => {
                     if (item.is_dir) {
                         state.browsingPath = item.path;
                         refreshBrowser();
+                    } else {
+                        // Clicking any frame picks the whole sequence it
+                        // belongs to; the backend resolves the file to its
+                        // folder and returns that sequence first.
+                        handleFrameSelection(item.path);
                     }
                 };
+                if (!item.is_dir) {
+                    li.title = "Select this sequence";
+                }
                 dom.fileList.appendChild(li);
             });
         } catch (e) {
             dom.fileList.innerHTML = `<li class="file-item log-error">Error: ${e.message}</li>`;
         }
+    }
+
+    // Parent directory of a POSIX path. The studio worktree has the same
+    // helper; kept identical so the two front-ends stay comparable.
+    function getParentPath(path) {
+        const parts = String(path).split('/').filter(Boolean);
+        parts.pop();
+        return parts.length ? '/' + parts.join('/') : '/';
+    }
+
+    async function handleFrameSelection(framePath) {
+        const folder = getParentPath(framePath);
+        dom.inputFolder.value = folder;
+        if (!dom.outputFolder.value) {
+            dom.outputFolder.value = getParentPath(folder);
+        }
+        dom.modal.style.display = 'none';
+        // Pass the frame itself, not the folder: that is what tells the
+        // backend which sequence was meant when a folder holds several.
+        await scanForSequences(framePath);
+        saveCurrentSettings();
     }
 
     async function handleFolderSelection() {

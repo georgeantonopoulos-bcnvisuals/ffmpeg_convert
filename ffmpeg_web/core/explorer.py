@@ -88,11 +88,24 @@ def get_directory_contents(path: str = None) -> BrowseResponse:
     )
 
 def scan_for_sequences(folder_path: str) -> List[SequenceItem]:
-    """Use clique to find file sequences in a folder."""
+    """Find file sequences for a folder, or for a single frame within one.
+
+    Accepts either a directory or the path of one frame. Picking a frame is
+    how most people think about choosing a sequence, so a file resolves to
+    its folder and the sequence that frame belongs to is returned first --
+    which is also the one the UI reads and probes.
+    """
     if not clique:
         return []
 
     try:
+        # A single frame identifies both the folder to scan and which of the
+        # sequences in it the user actually meant.
+        target_file = None
+        if os.path.isfile(folder_path):
+            target_file = os.path.basename(folder_path)
+            folder_path = os.path.dirname(folder_path)
+
         # Gather all files
         search_pattern = os.path.join(folder_path, "*")
         files = glob.glob(search_pattern)
@@ -109,6 +122,7 @@ def scan_for_sequences(folder_path: str) -> List[SequenceItem]:
 
         sequence_items: List[SequenceItem] = []
         _first_frames: List[str] = []
+        target_index = None
         for col in collections:
             indexes = list(col.indexes)
             if not indexes:
@@ -138,11 +152,22 @@ def scan_for_sequences(folder_path: str) -> List[SequenceItem]:
                 pattern=pattern,
                 range_string=f"[{start}-{end}]",
             )
+            if target_file is not None and any(
+                os.path.basename(member) == target_file for member in col
+            ):
+                target_index = len(sequence_items)
+
             sequence_items.append(item)
             _first_frames.append(
                 os.path.join(dir_head, f"{base_head}{start:0{padding}d}{col.tail}")
             )
             
+        # Put the sequence the selected frame belongs to first, so it is the
+        # one the UI adopts and the one probed below.
+        if target_index:
+            sequence_items.insert(0, sequence_items.pop(target_index))
+            _first_frames.insert(0, _first_frames.pop(target_index))
+
         # Probe ONLY the sequence the UI actually uses (the first one).
         # Probing every sequence spawned one oiiotool per collection inside
         # this request, which stalls badly on folders holding many
