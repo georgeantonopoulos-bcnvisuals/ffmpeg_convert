@@ -3,7 +3,7 @@ import subprocess
 import threading
 import re
 import asyncio
-from typing import Optional, Callable, Tuple
+from typing import List, Optional, Callable, Tuple
 from pydantic import BaseModel
 from . import reformat
 from .utils import normalize_fps, calculate_duration_and_frames
@@ -36,6 +36,95 @@ def build_video_filter_chain(
 
     scale_filter = "scale=" + ":".join(scale_options)
     return f"{setpts_filter},fps={out_ffmpeg_fps_str},{scale_filter}"
+
+
+# Codecs that encode toward a target bitrate, as opposed to ProRes' qscale
+# or QTRLE's lossless RLE.  ``h264_h10`` is H.264 High 10: the same encoder
+# as ``h264`` but carrying a 10-bit picture.
+BITRATE_CODECS = ("h264", "h265", "h264_h10")
+
+# Codecs whose pipeline has to stay 10-bit from the source to the encoder.
+TEN_BIT_CODECS = ("h264_h10",)
+
+PIX_FMT_8BIT = "yuv420p"
+PIX_FMT_10BIT = "yuv420p10le"
+
+
+def exr_bit_depth_for_codec(codec: str) -> str:
+    """Pick the oiiotool output depth for the EXR pre-pass.
+
+    The pre-pass writes intermediate PNGs that FFmpeg then encodes, so an
+    8-bit intermediate would quantise the picture before a 10-bit codec
+    ever saw it -- leaving High 10 as pure file-size overhead on EXR
+    sources.  16-bit costs roughly double the temp space, so only the
+    codecs that can use the depth ask for it.
+    """
+    return "uint16" if codec in TEN_BIT_CODECS else "uint8"
+
+
+def select_encoder(codec: str, gpu_caps: dict) -> Tuple[str, bool]:
+    """Choose the encoder library, and report whether it is an NVENC one.
+
+    ``h264_h10`` is deliberately absent from the NVENC branches: NVIDIA's
+    H.264 encoder has no 10-bit mode, so handing it a 10-bit frame fails
+    at runtime with an unsupported pixel format.  High 10 always encodes
+    on the CPU, even on a machine advertising ``h264_nvenc``.
+    """
+    if codec == "h264" and gpu_caps.get("nvenc_h264"):
+        return "h264_nvenc", True
+    if codec == "h265" and gpu_caps.get("nvenc_hevc"):
+        return "hevc_nvenc", True
+    return ("libx265" if codec == "h265" else "libx264"), False
+
+
+def build_bitrate_codec_params(
+    codec: str,
+    codec_lib: str,
+    use_nvenc: bool,
+    mp4_bitrate: str,
+) -> Tuple[List[str], str]:
+    """Build the encoder arguments and pixel format for a bitrate codec.
+
+    Returns ``(params, pix_fmt)``.  Each codec states its own profile and
+    tagging explicitly rather than letting a third codec fall through to
+    an ``else`` written for H.265 -- an H.264 stream that inherited
+    ``-tag:v hvc1`` would misdeclare itself as HEVC to players.
+    """
+    cb = f"{float(mp4_bitrate):.0f}M"
+    pix_fmt = PIX_FMT_10BIT if codec in TEN_BIT_CODECS else PIX_FMT_8BIT
+
+    if use_nvenc:
+        # Hardware encoder, CBR rate control for predictable file sizes.
+        params = [
+            "-c:v", codec_lib,
+            "-preset", "p4",  # NVENC preset: p1 (fastest) to p7 (best quality)
+            "-tune", "hq",
+            "-rc", "cbr",
+            "-b:v", cb,
+            "-maxrate", cb,
+            "-bufsize", f"{float(mp4_bitrate) * 2:.0f}M",  # 2x bitrate buffer
+        ]
+    else:
+        params = [
+            "-c:v", codec_lib,
+            "-preset", "medium",
+            "-b:v", cb,
+            "-minrate", cb,
+            "-maxrate", cb,
+            "-bufsize", cb,
+        ]
+
+    if codec == "h265":
+        params += ["-tag:v", "hvc1"]
+    else:
+        if not use_nvenc:
+            params += ["-x264-params", "nal-hrd=cbr"]
+        params += [
+            "-profile:v", "high10" if codec in TEN_BIT_CODECS else "high",
+            "-level:v", "5.1",
+        ]
+
+    return params, pix_fmt
 
 
 class FFmpegJobConfig(BaseModel):
@@ -207,31 +296,17 @@ class FFmpegHandler:
         output_pix_fmt = "yuv420p"
         video_codec_params = []
         
-        if config.codec in ["h264", "h265"]:
+        if config.codec in BITRATE_CODECS:
             if not config.mp4_bitrate:
-                self.log_callback('error', "Bitrate required for H.264/H.265")
+                self.log_callback('error', "Bitrate required for H.264/H.265/High 10")
                 return
-            
-            codec_lib = "libx264" if config.codec == "h264" else "libx265"
-            cb = f"{float(config.mp4_bitrate):.0f}M"
-            
-            video_codec_params = [
-                "-c:v", codec_lib,
-                "-preset", "medium",
-                "-b:v", cb,
-                "-minrate", cb,
-                "-maxrate", cb,
-                "-bufsize", cb,
-            ]
-            if config.codec == "h264":
-                video_codec_params.extend([
-                    "-x264-params", "nal-hrd=cbr",
-                    "-profile:v", "high",
-                    "-level:v", "5.1",
-                ])
-            else:
-                video_codec_params.extend(["-tag:v", "hvc1"])
-                
+
+            # This lineage has no NVENC path; High 10 is CPU-only regardless.
+            codec_lib, _ = select_encoder(config.codec, {})
+            video_codec_params, output_pix_fmt = build_bitrate_codec_params(
+                config.codec, codec_lib, False, config.mp4_bitrate
+            )
+
         elif config.codec.startswith("prores"):
             if not config.prores_profile or not config.prores_qscale:
                  self.log_callback('error', "ProRes profile and quality required")

@@ -256,7 +256,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const codec = dom.codec.value;
         dom.codecOptions.forEach(el => el.classList.add('hidden'));
 
-        if (codec === 'h264' || codec === 'h265') {
+        if (codec === 'h264' || codec === 'h265' || codec === 'h264_h10') {
             document.querySelector('.show-mp4').classList.remove('hidden');
             dom.outputFilename.value = dom.outputFilename.value.replace(/\.\w+$/, '.mp4');
         } else if (codec.startsWith('prores')) {

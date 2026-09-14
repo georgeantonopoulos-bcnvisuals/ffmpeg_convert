@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from . import config
 from .core import explorer, reformat
 from .core.deps import check_dependencies
-from .core.ffmpeg_handler import FFmpegHandler, FFmpegJobConfig
+from .core.ffmpeg_handler import FFmpegHandler, FFmpegJobConfig, exr_bit_depth_for_codec
 from .core.exr_handler import ExrHandler
 
 # Setup Logging
@@ -203,12 +203,17 @@ class JobManager:
                     self.is_running = False
                     return
 
+                # A 10-bit codec needs a 16-bit intermediate, otherwise the
+                # pre-pass quantises to 8 bits before FFmpeg ever sees the frames.
+                exr_depth = exr_bit_depth_for_codec(job_config.codec)
+
                 temp_dir = self.exr_handler.convert_exr_sequence(
                     input_folder=job_config.input_folder,
                     pattern=job_config.filename_pattern,
                     start_frame=job_config.start_frame,
                     end_frame=job_config.end_frame,
                     size=exr_size,
+                    bit_depth=exr_depth,
                 )
 
                 if not temp_dir or self.exr_handler.is_cancelled:
