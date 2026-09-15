@@ -36,12 +36,16 @@ async def _revalidate_static(request, call_next):
     """Force browsers to revalidate /static instead of trusting a heuristic.
 
     StaticFiles already emits an ETag, but without Cache-Control a browser
-    may serve a stale copy without asking.  That silently shipped an old
-    ui.js to users after a deploy, so we make revalidation explicit: an
-    unchanged file still costs only a 304.
+    may serve a stale copy without asking, falling back to heuristic
+    freshness -- roughly 10% of the document's age.  That silently
+    shipped an old ui.js to users after a deploy, and later an
+    index.html whose codec list predated it.  "/" must be covered
+    too: index.html is served from the root by FileResponse and
+    carries the codec dropdown.  An unchanged file still costs only
+    a 304.
     """
     response = await call_next(request)
-    if request.url.path.startswith("/static"):
+    if request.url.path == "/" or request.url.path.startswith("/static"):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
