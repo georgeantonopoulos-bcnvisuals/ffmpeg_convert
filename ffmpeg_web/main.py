@@ -12,9 +12,11 @@ from fastapi.responses import FileResponse
 from . import config
 from .core import explorer, reformat
 from .core.deps import check_dependencies
+from .core import version
 from .core.ffmpeg_handler import (
     FFmpegHandler,
     FFmpegJobConfig,
+    describe_codec,
     exr_bit_depth_for_codec,
     resolve_output_transform,
 )
@@ -34,6 +36,12 @@ if not os.path.exists(STATIC_DIR):
     os.makedirs(STATIC_DIR)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Codecs the dropdown offers, in the order it offers them.
+UI_CODECS = (
+    "h265", "h264", "h264_h10",
+    "prores_422", "prores_422_lt", "prores_444", "qtrle",
+)
 
 
 @app.middleware("http")
@@ -200,6 +208,25 @@ class JobManager:
         temp_dir = ""
         exr_phase_started = False
         try:
+            # State the encoder settings up front: the recurring support
+            # question is "which settings did this actually use", and the
+            # answer belongs in the log next to the output.
+            _d = describe_codec(job_config.codec)
+            self._log_callback(
+                "output",
+                "Encoder: "
+                + "  |  ".join(
+                    part for part in (
+                        _d.get("encoder"),
+                        f"profile {_d['profile']}" if _d.get("profile") else "",
+                        f"level {_d['level']}" if _d.get("level") else "",
+                        _d.get("pix_fmt"),
+                        f"build {version.LOADED_BUILD_ID}",
+                    ) if part
+                )
+                + "\n",
+            )
+
             # 1. EXR Conversion Pass
             if is_exr:
                 self._log_callback("output", "Starting EXR Conversion Phase...\n")
@@ -309,6 +336,24 @@ async def read_root() -> Any:
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return {"message": "Backend running. Please install frontend files."}
+
+
+@app.get("/api/version")
+async def api_version() -> Any:
+    """Report whether this process is running the code now on disk.
+
+    Files are deployed by rsync onto a share while servers keep running,
+    so a process can serve indefinitely from modules it imported before
+    the update.  Comparing the two build ids surfaces that instead of
+    leaving it to be worked out from the output.
+    """
+    return version.staleness(version.LOADED_BUILD_ID, version.current_build_id())
+
+
+@app.get("/api/codec_info")
+async def api_codec_info() -> Any:
+    """Encoder settings per codec, for the readout in the UI."""
+    return {c: describe_codec(c) for c in UI_CODECS}
 
 
 @app.get("/api/settings")

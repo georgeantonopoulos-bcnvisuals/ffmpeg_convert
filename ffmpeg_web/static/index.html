@@ -51,6 +51,8 @@
         </section>
 
         <!-- Output Section -->
+        <div id="version_banner" class="deps-warning hidden"></div>
+
         <section id="output-section">
             <h2>Output Settings</h2>
             <div class="form-grid">
@@ -74,6 +76,11 @@
                         <option value="Output - Rec.709">Rec.709 (broadcast / delivery)</option>
                     </select>
                     <small class="hint">ACES output transform. Applies to EXR sources only.</small>
+                </div>
+
+                <div class="form-group" style="grid-column:1/-1">
+                    <label>Encoder settings</label>
+                    <div id="codec_info" style="font-family:monospace;font-size:0.9em;padding:6px 0;letter-spacing:0.02em"></div>
                 </div>
 
                 <div class="form-group">

@@ -3,7 +3,7 @@ import subprocess
 import threading
 import re
 import asyncio
-from typing import List, Optional, Callable, Tuple
+from typing import Dict, List, Optional, Callable, Tuple
 from pydantic import BaseModel
 from . import reformat
 from .utils import normalize_fps, calculate_duration_and_frames
@@ -165,6 +165,36 @@ def resolve_output_transform(requested: Optional[str], codec: str) -> str:
             + ", ".join(OUTPUT_TRANSFORMS)
         )
     return requested
+
+
+def describe_codec(codec: str, gpu_caps: Optional[dict] = None) -> Dict[str, str]:
+    """Summarise what this codec will actually encode with.
+
+    Built from the very functions that assemble the FFmpeg command, so
+    the readout in the UI cannot drift from what the encoder is told.
+    A readout that is allowed to disagree with the command is worse than
+    having none at all.
+    """
+    info: Dict[str, str] = {
+        "codec": codec,
+        "output_transform": default_output_transform_for_codec(codec),
+    }
+    if codec in BITRATE_CODECS:
+        codec_lib, use_nvenc = select_encoder(codec, gpu_caps or {})
+        params, pix_fmt = build_bitrate_codec_params(codec, codec_lib, use_nvenc, "30")
+        info["encoder"] = codec_lib
+        info["pix_fmt"] = pix_fmt
+        for flag, key in (("-profile:v", "profile"), ("-level:v", "level")):
+            if flag in params:
+                info[key] = params[params.index(flag) + 1]
+    elif codec.startswith("prores"):
+        info["encoder"] = "prores_ks"
+    elif codec == "qtrle":
+        info["encoder"] = "qtrle"
+        info["pix_fmt"] = "rgb24"
+    else:
+        info["encoder"] = "unknown"
+    return info
 
 
 class FFmpegJobConfig(BaseModel):

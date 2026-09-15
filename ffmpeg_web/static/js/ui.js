@@ -22,6 +22,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         mp4Bitrate: document.getElementById('mp4_bitrate'),
         proresQscale: document.getElementById('prores_qscale'),
         outputTransform: document.getElementById('output_transform'),
+        codecInfo: document.getElementById('codec_info'),
+        versionBanner: document.getElementById('version_banner'),
         desiredDuration: document.getElementById('desired_duration'),
         audioOption: document.getElementById('audio_option'),
 
@@ -58,6 +60,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         await loadSettings();
         setupWebSocket();
         await checkDependencies();
+        await loadCodecInfo();
+        checkVersion();
+        // Cheap poll plus a check whenever the tab regains focus, so a
+        // deploy that happens while this page is open is noticed.
+        setInterval(checkVersion, 30000);
+        window.addEventListener('focus', checkVersion);
     }
 
     // --- WebSockets ---
@@ -463,7 +471,61 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Once the user picks a transform we stop overriding it on codec change.
     dom.outputTransform.addEventListener('change', () => {
         state.transformCustom = true;
+        renderCodecInfo();
     });
+    dom.codec.addEventListener('change', renderCodecInfo);
+
+    let codecInfoCache = {};
+
+    async function loadCodecInfo() {
+        try {
+            const res = await fetch('/api/codec_info', { cache: 'no-store' });
+            codecInfoCache = await res.json();
+            renderCodecInfo();
+        } catch (e) {
+            // The readout is advisory; never let it break the page.
+        }
+    }
+
+    const PROFILE_LABELS = { high10: 'High 10', high: 'High' };
+
+    function renderCodecInfo() {
+        const info = codecInfoCache[dom.codec.value];
+        dom.codecInfo.textContent = '';
+        if (!info) { return; }
+
+        const levelText = info.level ? 'L ' + info.level : '';
+        const parts = [info.encoder];
+        if (info.profile) parts.push(PROFILE_LABELS[info.profile] || info.profile);
+        if (levelText) parts.push(levelText);
+        if (info.pix_fmt) parts.push(info.pix_fmt);
+        parts.push(dom.outputTransform.value.replace('Output - ', ''));
+
+        // Built as nodes rather than innerHTML so the level can be
+        // emphasised without ever interpreting API text as markup.
+        parts.forEach((text, i) => {
+            if (i) dom.codecInfo.appendChild(document.createTextNode('  \u00b7  '));
+            const span = document.createElement('span');
+            span.textContent = text;
+            if (levelText && text === levelText) {
+                // The number people read off for delivery QC.
+                span.style.fontWeight = '700';
+                span.style.color = '#f18d79';
+            }
+            dom.codecInfo.appendChild(span);
+        });
+    }
+
+    async function checkVersion() {
+        try {
+            const res = await fetch('/api/version', { cache: 'no-store' });
+            const v = await res.json();
+            dom.versionBanner.textContent = v.message || '';
+            dom.versionBanner.classList.toggle('hidden', !v.stale);
+        } catch (e) {
+            // Offline or mid-restart; say nothing rather than cry wolf.
+        }
+    }
 
     // Typing in the filename marks it as the user's own, so folder
     // selection stops renaming it. Persisted, so it survives a restart.
