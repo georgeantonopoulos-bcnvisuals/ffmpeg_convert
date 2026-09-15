@@ -130,7 +130,7 @@ def test_h264_cpu_params_are_unchanged() -> None:
         "-bufsize", "30M",
         "-x264-params", "nal-hrd=cbr",
         "-profile:v", "high",
-        "-level:v", "5.1",
+        "-level:v", "6.1",
     ]
     assert pix_fmt == "yuv420p"
 
@@ -160,8 +160,39 @@ def test_h264_nvenc_params_are_unchanged() -> None:
         "-maxrate", "30M",
         "-bufsize", "60M",
         "-profile:v", "high",
-        "-level:v", "5.1",
+        "-level:v", "6.1",
     ]
+
+
+def test_h264_declares_level_61() -> None:
+    """Delivery spec asks for 6.1, and 5.1 was genuinely non-conforming.
+
+    2752x1600 at 60fps is 172x100 = 17,200 macroblocks per frame, so
+    1,032,000 MB/s -- past level 5.1's 983,040 ceiling. The file used to
+    claim a level it exceeded, which strict QC rejects. Declaring a
+    higher level than needed is legal; declaring a lower one is not.
+    """
+    for codec, lib in (("h264", "libx264"), ("h264_h10", "libx264")):
+        params, _ = build_bitrate_codec_params(codec, lib, False, "30")
+        assert params[params.index("-level:v") + 1] == "6.1", codec
+
+
+def test_declared_level_covers_our_delivery_formats() -> None:
+    """The declared level must actually admit the work we ship."""
+    max_mbps_for_level = {"5.1": 983_040, "5.2": 2_073_600,
+                          "6.0": 4_177_920, "6.1": 8_355_840}
+    params, _ = build_bitrate_codec_params("h264_h10", "libx264", False, "30")
+    level = params[params.index("-level:v") + 1]
+
+    for width, height, fps, label in (
+        (2752, 1600, 60, "Trident top screen"),
+        (3840, 2160, 60, "UHD 60"),
+    ):
+        mbs = -(-width // 16) * -(-height // 16) * fps
+        assert mbs <= max_mbps_for_level[level], (
+            f"{label}: needs {mbs:,} MB/s, level {level} allows "
+            f"{max_mbps_for_level[level]:,}"
+        )
 
 
 def test_h264_h10_carries_cbr_bitrate_like_its_siblings() -> None:
@@ -276,6 +307,8 @@ def main() -> None:
         ("h265 cpu params unchanged", test_h265_cpu_params_are_unchanged),
         ("h264 nvenc params unchanged", test_h264_nvenc_params_are_unchanged),
         ("h264_h10 cbr bitrate", test_h264_h10_carries_cbr_bitrate_like_its_siblings),
+        ("h264 declares level 6.1", test_h264_declares_level_61),
+        ("level covers delivery formats", test_declared_level_covers_our_delivery_formats),
         ("h264_h10 in bitrate family", test_h264_h10_is_a_bitrate_codec),
         ("prores not in bitrate family", test_prores_is_not_a_bitrate_codec),
         ("10-bit codec wants uint16", test_ten_bit_codec_asks_for_sixteen_bit_exr_frames),

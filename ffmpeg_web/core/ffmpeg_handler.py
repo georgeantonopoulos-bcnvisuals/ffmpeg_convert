@@ -119,9 +119,13 @@ def build_bitrate_codec_params(
     else:
         if not use_nvenc:
             params += ["-x264-params", "nal-hrd=cbr"]
+        # Level 6.1 is what delivery asks for, and 5.1 was in fact too low:
+        # 2752x1600 at 60fps needs 1,032,000 macroblocks/s against 5.1's
+        # 983,040 ceiling, so the file declared a level it exceeded.
+        # Over-declaring is legal; under-declaring fails conformance.
         params += [
             "-profile:v", "high10" if codec in TEN_BIT_CODECS else "high",
-            "-level:v", "5.1",
+            "-level:v", "6.1",
         ]
 
     return params, pix_fmt
