@@ -12,7 +12,12 @@ from fastapi.responses import FileResponse
 from . import config
 from .core import explorer, reformat
 from .core.deps import check_dependencies
-from .core.ffmpeg_handler import FFmpegHandler, FFmpegJobConfig, exr_bit_depth_for_codec
+from .core.ffmpeg_handler import (
+    FFmpegHandler,
+    FFmpegJobConfig,
+    exr_bit_depth_for_codec,
+    resolve_output_transform,
+)
 from .core.exr_handler import ExrHandler
 
 # Setup Logging
@@ -211,6 +216,20 @@ class JobManager:
                 # pre-pass quantises to 8 bits before FFmpeg ever sees the frames.
                 exr_depth = exr_bit_depth_for_codec(job_config.codec)
 
+                # The ACES output transform is applied here, on scene-linear
+                # float, rather than as a second pass on quantised frames.
+                try:
+                    exr_odt = resolve_output_transform(
+                        job_config.output_transform, job_config.codec
+                    )
+                except ValueError as exc:
+                    self._log_callback("error", str(exc))
+                    self.is_running = False
+                    return
+                self._log_callback(
+                    "output", f"Colour output: {exr_odt}\n"
+                )
+
                 temp_dir = self.exr_handler.convert_exr_sequence(
                     input_folder=job_config.input_folder,
                     pattern=job_config.filename_pattern,
@@ -218,6 +237,7 @@ class JobManager:
                     end_frame=job_config.end_frame,
                     size=exr_size,
                     bit_depth=exr_depth,
+                    output_transform=exr_odt,
                 )
 
                 if not temp_dir or self.exr_handler.is_cancelled:

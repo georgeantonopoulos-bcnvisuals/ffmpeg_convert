@@ -21,6 +21,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         outputFps: document.getElementById('frame_rate'),
         mp4Bitrate: document.getElementById('mp4_bitrate'),
         proresQscale: document.getElementById('prores_qscale'),
+        outputTransform: document.getElementById('output_transform'),
         desiredDuration: document.getElementById('desired_duration'),
         audioOption: document.getElementById('audio_option'),
 
@@ -136,6 +137,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.desiredDuration.value = settings.desired_duration || "15";
             dom.mp4Bitrate.value = settings.mp4_bitrate || "30";
             dom.proresQscale.value = settings.prores_qscale || "9";
+            if (settings.output_transform) {
+                dom.outputTransform.value = settings.output_transform;
+            }
+            state.transformCustom = Boolean(settings.output_transform_custom);
 
             dom.reformatEnabled.checked = Boolean(settings.reformat_enabled);
             dom.reformatWidth.value = settings.reformat_width || "";
@@ -166,8 +171,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             codec: dom.codec.value,
             mp4_bitrate: dom.mp4Bitrate.value,
             prores_qscale: dom.proresQscale.value,
+            output_transform: dom.outputTransform.value,
             output_filename: dom.outputFilename.value,
             output_filename_custom: state.filenameCustom,
+            output_transform_custom: state.transformCustom,
             reformat_enabled: dom.reformatEnabled.checked,
             reformat_width: dom.reformatWidth.value,
             reformat_height: dom.reformatHeight.value
@@ -252,8 +259,18 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    // Mirrors default_output_transform_for_codec() on the backend, which
+    // re-derives this when the client sends nothing, so the two cannot
+    // drift into producing different pixels.
+    function defaultTransformForCodec(codec) {
+        return codec.startsWith('prores') ? 'Output - Rec.709' : 'Output - sRGB';
+    }
+
     function updateCodecOptions() {
         const codec = dom.codec.value;
+        if (!state.transformCustom) {
+            dom.outputTransform.value = defaultTransformForCodec(codec);
+        }
         dom.codecOptions.forEach(el => el.classList.add('hidden'));
 
         if (codec === 'h264' || codec === 'h265' || codec === 'h264_h10') {
@@ -443,6 +460,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     dom.codec.addEventListener('change', updateCodecOptions);
+    // Once the user picks a transform we stop overriding it on codec change.
+    dom.outputTransform.addEventListener('change', () => {
+        state.transformCustom = true;
+    });
 
     // Typing in the filename marks it as the user's own, so folder
     // selection stops renaming it. Persisted, so it survives a restart.
@@ -491,6 +512,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             mp4_bitrate: dom.mp4Bitrate.value,
             prores_profile: dom.codec.value.startsWith('prores') ? dom.codec.value.replace('prores_', '') : "2",
             prores_qscale: dom.proresQscale.value,
+            output_transform: dom.outputTransform.value,
             audio_option: dom.audioOption.value,
             start_frame: state.frameRange.start,
             end_frame: state.frameRange.end,

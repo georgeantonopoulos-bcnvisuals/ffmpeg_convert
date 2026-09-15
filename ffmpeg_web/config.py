@@ -16,6 +16,8 @@ DEFAULT_SETTINGS = {
     "prores_qscale": "9",
     "output_filename": "output.mp4",
     "output_filename_custom": False,
+    "output_transform": "Output - sRGB",
+    "output_transform_custom": False,
     "reformat_enabled": False,
     "reformat_width": "",
     "reformat_height": ""

@@ -127,6 +127,42 @@ def build_bitrate_codec_params(
     return params, pix_fmt
 
 
+SRGB_ODT = "Output - sRGB"
+REC709_ODT = "Output - Rec.709"
+
+# The only ACES output transforms the UI offers.  Both share the RRT and
+# Rec.709 primaries and differ only in the encoding function, so choosing
+# between them is a tone-response decision, not a gamut one.
+OUTPUT_TRANSFORMS = (SRGB_ODT, REC709_ODT)
+
+
+def default_output_transform_for_codec(codec: str) -> str:
+    """Pre-select the transform that suits where this codec usually goes.
+
+    ProRes goes to editorial and grading, which expect the broadcast
+    Rec.709 ODT.  H.264/H.265 review files are watched on computer
+    screens, so they default to sRGB.  Anything unrecognised gets sRGB,
+    which is the historical behaviour.
+    """
+    return REC709_ODT if codec.startswith("prores") else SRGB_ODT
+
+
+def resolve_output_transform(requested: Optional[str], codec: str) -> str:
+    """Validate an explicit choice, else fall back to the codec default.
+
+    Rejecting an unknown name here turns a typo into an immediate error
+    rather than an oiiotool failure partway through a sequence.
+    """
+    if not requested:
+        return default_output_transform_for_codec(codec)
+    if requested not in OUTPUT_TRANSFORMS:
+        raise ValueError(
+            f"Unsupported output transform {requested!r}; expected one of "
+            + ", ".join(OUTPUT_TRANSFORMS)
+        )
+    return requested
+
+
 class FFmpegJobConfig(BaseModel):
     input_folder: str
     filename_pattern: str
@@ -136,6 +172,7 @@ class FFmpegJobConfig(BaseModel):
     source_frame_rate: str
     desired_duration: str
     codec: str
+    output_transform: Optional[str] = None
     mp4_bitrate: Optional[str] = None
     prores_profile: Optional[str] = None
     prores_qscale: Optional[str] = None

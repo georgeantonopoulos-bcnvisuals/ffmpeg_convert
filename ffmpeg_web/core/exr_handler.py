@@ -15,6 +15,7 @@ def build_frame_command(
     color_space: str,
     size: Optional[Tuple[int, int]],
     bit_depth: str = "uint8",
+    output_transform: str = "Output - sRGB",
 ) -> List[str]:
     """Build the oiiotool command that converts a single EXR frame.
 
@@ -38,7 +39,7 @@ def build_frame_command(
         cmd += [reformat.OIIO_RESIZE_ARG, f"{size[0]}x{size[1]}"]
 
     cmd += [
-        "--colorconvert", color_space, "Output - sRGB",
+        "--colorconvert", color_space, output_transform,
         "-d", bit_depth,
         "--compression", "none",
         "--no-clobber",
@@ -64,7 +65,8 @@ class ExrHandler:
                            end_frame: int,
                            color_space: str = "ACES - ACEScg",
                            size: Optional[Tuple[int, int]] = None,
-                           bit_depth: str = "uint8") -> str:
+                           bit_depth: str = "uint8",
+                           output_transform: str = "Output - sRGB") -> str:
         """
         Convert EXR sequence to PNGs in a temp directory.
         Returns the path to the temp directory on success, or empty string on failure.
@@ -131,6 +133,7 @@ class ExrHandler:
             cmd = build_frame_command(
                 input_file, output_file, self.ocio_config, color_space, size,
                 bit_depth=bit_depth,
+                output_transform=output_transform,
             )
             cmds.append((cmd, frame))
 
