@@ -211,7 +211,7 @@ class JobManager:
             # State the encoder settings up front: the recurring support
             # question is "which settings did this actually use", and the
             # answer belongs in the log next to the output.
-            _d = describe_codec(job_config.codec)
+            _d = describe_codec(job_config.codec, level=job_config.level)
             self._log_callback(
                 "output",
                 "Encoder: "
@@ -351,9 +351,14 @@ async def api_version() -> Any:
 
 
 @app.get("/api/codec_info")
-async def api_codec_info() -> Any:
-    """Encoder settings per codec, for the readout in the UI."""
-    return {c: describe_codec(c) for c in UI_CODECS}
+async def api_codec_info(level: Optional[str] = None) -> Any:
+    """Encoder settings per codec, for the readout in the UI.
+
+    ``level`` lets the readout follow the level dropdown; it is normalised
+    the same way the encoder arguments are, so what is shown is what the
+    encoder would be told.
+    """
+    return {c: describe_codec(c, level=level) for c in UI_CODECS}
 
 
 @app.get("/api/settings")

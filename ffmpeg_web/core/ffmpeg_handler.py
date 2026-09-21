@@ -46,6 +46,14 @@ BITRATE_CODECS = ("h264", "h265", "h264_h10")
 # Codecs whose pipeline has to stay 10-bit from the source to the encoder.
 TEN_BIT_CODECS = ("h264_h10",)
 
+# H.264 levels the UI offers, as libx264's -level spells them (Annex A).
+# H.265 is deliberately absent: see build_bitrate_codec_params.
+H264_LEVELS = ("5", "5.1", "6.1")
+DEFAULT_H264_LEVEL = "6.1"
+
+# Codecs whose level the user may choose.
+LEVEL_CODECS = ("h264", "h264_h10")
+
 PIX_FMT_8BIT = "yuv420p"
 PIX_FMT_10BIT = "yuv420p10le"
 
@@ -77,11 +85,35 @@ def select_encoder(codec: str, gpu_caps: dict) -> Tuple[str, bool]:
     return ("libx265" if codec == "h265" else "libx264"), False
 
 
+def normalize_level(requested: Optional[str]) -> str:
+    """Return a level libx264 will accept, falling back to the default.
+
+    The browser is not trusted to send a valid level: an unrecognised one
+    makes libx264 fail to open the encoder, which would surface as a dead
+    job rather than a bad setting.  Anything unknown becomes the default,
+    which is the safest declaration rather than the lowest.
+    """
+    if requested is None:
+        return DEFAULT_H264_LEVEL
+    candidate = str(requested).strip()
+    if candidate in H264_LEVELS:
+        return candidate
+    # "5.0" and "6.10" mean the same levels as "5" and "6.1".
+    for known in H264_LEVELS:
+        try:
+            if float(candidate) == float(known):
+                return known
+        except ValueError:
+            break
+    return DEFAULT_H264_LEVEL
+
+
 def build_bitrate_codec_params(
     codec: str,
     codec_lib: str,
     use_nvenc: bool,
     mp4_bitrate: str,
+    level: Optional[str] = None,
 ) -> Tuple[List[str], str]:
     """Build the encoder arguments and pixel format for a bitrate codec.
 
@@ -115,17 +147,22 @@ def build_bitrate_codec_params(
         ]
 
     if codec == "h265":
+        # No level is declared for HEVC: libx265 has no -level option (the
+        # generic one is silently ignored) and would need
+        # -x265-params level-idc.  Letting x265 derive the level from the
+        # stream it actually produced is both the common practice and the
+        # only way to be sure the declaration is not a lie.
         params += ["-tag:v", "hvc1"]
     else:
         if not use_nvenc:
             params += ["-x264-params", "nal-hrd=cbr"]
-        # Level 6.1 is what delivery asks for, and 5.1 was in fact too low:
-        # 2752x1600 at 60fps needs 1,032,000 macroblocks/s against 5.1's
-        # 983,040 ceiling, so the file declared a level it exceeded.
-        # Over-declaring is legal; under-declaring fails conformance.
+        # Over-declaring a level is legal; under-declaring fails
+        # conformance.  6.1 is the safe delivery default -- 5.1 was in fact
+        # too low, as 2752x1600 at 60fps needs 1,032,000 macroblocks/s
+        # against 5.1's 983,040 ceiling.
         params += [
             "-profile:v", "high10" if codec in TEN_BIT_CODECS else "high",
-            "-level:v", "6.1",
+            "-level:v", normalize_level(level),
         ]
 
     return params, pix_fmt
@@ -167,7 +204,11 @@ def resolve_output_transform(requested: Optional[str], codec: str) -> str:
     return requested
 
 
-def describe_codec(codec: str, gpu_caps: Optional[dict] = None) -> Dict[str, str]:
+def describe_codec(
+    codec: str,
+    gpu_caps: Optional[dict] = None,
+    level: Optional[str] = None,
+) -> Dict[str, str]:
     """Summarise what this codec will actually encode with.
 
     Built from the very functions that assemble the FFmpeg command, so
@@ -181,7 +222,9 @@ def describe_codec(codec: str, gpu_caps: Optional[dict] = None) -> Dict[str, str
     }
     if codec in BITRATE_CODECS:
         codec_lib, use_nvenc = select_encoder(codec, gpu_caps or {})
-        params, pix_fmt = build_bitrate_codec_params(codec, codec_lib, use_nvenc, "30")
+        params, pix_fmt = build_bitrate_codec_params(
+            codec, codec_lib, use_nvenc, "30", level
+        )
         info["encoder"] = codec_lib
         info["pix_fmt"] = pix_fmt
         for flag, key in (("-profile:v", "profile"), ("-level:v", "level")):
@@ -208,6 +251,9 @@ class FFmpegJobConfig(BaseModel):
     codec: str
     output_transform: Optional[str] = None
     mp4_bitrate: Optional[str] = None
+    # H.264 level (see H264_LEVELS).  None means the default; the value is
+    # validated server-side, never trusted as sent.
+    level: Optional[str] = None
     prores_profile: Optional[str] = None
     prores_qscale: Optional[str] = None
     audio_option: str = "No Audio"
@@ -375,7 +421,7 @@ class FFmpegHandler:
             # This lineage has no NVENC path; High 10 is CPU-only regardless.
             codec_lib, _ = select_encoder(config.codec, {})
             video_codec_params, output_pix_fmt = build_bitrate_codec_params(
-                config.codec, codec_lib, False, config.mp4_bitrate
+                config.codec, codec_lib, False, config.mp4_bitrate, config.level
             )
 
         elif config.codec.startswith("prores"):

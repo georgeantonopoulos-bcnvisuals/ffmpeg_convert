@@ -28,6 +28,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         codec: document.getElementById('codec'),
         outputFps: document.getElementById('frame_rate'),
         mp4Bitrate: document.getElementById('mp4_bitrate'),
+        h264Level: document.getElementById('h264_level'),
         proresQscale: document.getElementById('prores_qscale'),
         outputTransform: document.getElementById('output_transform'),
         codecInfo: document.getElementById('codec_info'),
@@ -243,6 +244,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.outputFps.value = settings.frame_rate || "24";
             dom.desiredDuration.value = settings.desired_duration || "15";
             dom.mp4Bitrate.value = settings.mp4_bitrate || "30";
+            dom.h264Level.value = settings.level || "6.1";
             dom.proresQscale.value = settings.prores_qscale || "9";
             if (settings.output_transform) {
                 dom.outputTransform.value = settings.output_transform;
@@ -277,6 +279,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             desired_duration: dom.desiredDuration.value,
             codec: dom.codec.value,
             mp4_bitrate: dom.mp4Bitrate.value,
+            level: dom.h264Level.value,
             prores_qscale: dom.proresQscale.value,
             output_transform: dom.outputTransform.value,
             output_filename: dom.outputFilename.value,
@@ -375,6 +378,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (codec === 'h264' || codec === 'h265' || codec === 'h264_h10') {
             document.querySelector('.show-mp4').classList.remove('hidden');
+            // H.265 is excluded: libx265 has no -level option, so the
+            // backend declares none and the control would be a lie.
+            if (codec === 'h264' || codec === 'h264_h10') {
+                document.querySelector('.show-h264-level').classList.remove('hidden');
+            }
             dom.outputFilename.value = dom.outputFilename.value.replace(/\.\w+$/, '.mp4');
         } else if (codec.startsWith('prores')) {
             document.querySelector('.show-prores').classList.remove('hidden');
@@ -804,6 +812,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     dom.codec.addEventListener('change', updateCodecOptions);
+    dom.h264Level.addEventListener('change', () => {
+        saveCurrentSettings();
+        loadCodecInfo();
+    });
     dom.outputTransform.addEventListener('change', () => {
         state.transformCustom = true;
         renderCodecInfo();
@@ -814,7 +826,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function loadCodecInfo() {
         try {
-            const res = await fetch('/api/codec_info', { cache: 'no-store' });
+            const level = dom.h264Level ? dom.h264Level.value : '';
+            const url = '/api/codec_info' + (level ? `?level=${encodeURIComponent(level)}` : '');
+            const res = await fetch(url, { cache: 'no-store' });
             codecInfoCache = await res.json();
             renderCodecInfo();
         } catch (e) {
@@ -829,11 +843,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         dom.codecInfo.innerHTML = '';
         if (!info) return;
 
-        const levelText = info.level ? 'Level ' + info.level : '';
         const items = [
             { label: 'Encoder', value: info.encoder },
             { label: 'Profile', value: info.profile ? (PROFILE_LABELS[info.profile] || info.profile) : null },
-            { label: 'Level', value: levelText, highlight: true },
+            // The chip already reads "Level: ..."; prefixing the value too
+            // rendered as "Level: Level 6.1".
+            { label: 'Level', value: info.level || '', highlight: true },
             { label: 'Format', value: info.pix_fmt },
             { label: 'Transform', value: dom.outputTransform.value.replace('Output - ', '') }
         ].filter(item => Boolean(item.value));
@@ -915,6 +930,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             desired_duration: dom.desiredDuration.value,
             codec: dom.codec.value,
             mp4_bitrate: dom.mp4Bitrate.value,
+            level: dom.h264Level.value,
             prores_profile: dom.codec.value.startsWith('prores') ? dom.codec.value.replace('prores_', '') : "2",
             prores_qscale: dom.proresQscale.value,
             output_transform: dom.outputTransform.value,

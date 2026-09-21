@@ -152,6 +152,17 @@
                             <input type="number" id="mp4_bitrate" value="30" min="1" step="1">
                         </div>
 
+                        <!-- Codec Specific: H.264 level (not H.265 -- x265 derives its own) -->
+                        <div class="form-group codec-option show-h264-level hidden">
+                            <label for="h264_level">H.264 Level</label>
+                            <select id="h264_level">
+                                <option value="5">5.0</option>
+                                <option value="5.1">5.1</option>
+                                <option value="6.1">6.1 (default)</option>
+                            </select>
+                            <small class="hint">Over-declaring is safe; under-declaring fails conformance.</small>
+                        </div>
+
                         <!-- Codec Specific: ProRes Quality -->
                         <div class="form-group codec-option show-prores hidden">
                             <label for="prores_qscale">ProRes Quality (qscale)</label>
