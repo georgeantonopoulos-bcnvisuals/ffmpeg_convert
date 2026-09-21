@@ -48,6 +48,13 @@ def get_directory_contents(path: str = None) -> BrowseResponse:
         # Fallback to root or cwd if invalid
         path = os.getcwd()
 
+    # A frame path is a legitimate thing to arrive here: the input field
+    # accepts a pasted frame, and older settings files may have persisted one
+    # as last_input_folder. Browse the containing folder rather than letting
+    # os.scandir raise NotADirectoryError and 500 the whole file browser.
+    if os.path.isfile(path):
+        path = os.path.dirname(path)
+
     items = []
     
     try:

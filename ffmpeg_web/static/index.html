@@ -4,198 +4,375 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FFmpeg Converter</title>
-    <link rel="stylesheet" href="/static/style.css?v=3">
-    <!-- Google Fonts -->
+    <title>BCN FFMpeg Converter</title>
+    <link rel="stylesheet" href="/static/style.css?v=4">
+    <!-- Google Fonts with local fallback -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
         rel="stylesheet">
 </head>
 
 <body>
-    <div class="app-container">
-        <header>
-            <h1>FFmpeg Converter</h1>
-            <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
-                <div id="status-indicator" class="log-info">Ready</div>
-                <div id="deps-warning" class="deps-warning hidden"></div>
+    <div class="app-layout">
+        <!-- Top App Bar -->
+        <header class="app-header">
+            <div class="header-brand">
+                <img src="/static/images/BCN%20-%20Colour%20White.svg?v=1" alt="BCN Visuals logo" id="app-logo">
+                <div class="brand-divider" aria-hidden="true"></div>
+                <div class="brand-text">
+                    <h1>FFmpeg Converter</h1>
+                    <span class="brand-subtitle">Studio Production Transcoder</span>
+                </div>
+            </div>
+
+            <div class="header-status">
+                <div id="status-pill" class="status-pill status-ready">
+                    <span class="status-dot"></span>
+                    <span id="status-indicator">Ready</span>
+                </div>
+                <div id="deps-warning" class="alert-banner alert-warning hidden"></div>
+                <div id="version_banner" class="alert-banner alert-warning hidden"></div>
             </div>
         </header>
 
-        <!-- Input Section -->
-        <section id="input-section">
-            <h2>Input Settings</h2>
-            <div class="form-grid">
-                <div class="form-group full-width">
-                    <label>Input Sequence Folder</label>
-                    <div class="input-group">
-                        <input type="text" id="input_folder" placeholder="Paste or select a folder path...">
-                        <button class="btn btn-secondary" id="browse-btn">Browse</button>
-                    </div>
-                </div>
-
-                <div class="form-group full-width">
-                    <label>Filename Pattern</label>
-                    <input type="text" id="filename_pattern" placeholder="e.g. shot_010_%04d.exr">
-                    <small style="color: grey; font-size: 0.8rem; margin-top: 4px;">Detected: <span
-                            id="detected-range">None</span></small>
-                </div>
-
-                <div class="form-group">
-                    <label>Source FPS</label>
-                    <input type="text" id="source_frame_rate" value="24">
-                </div>
-            </div>
-        </section>
-
-        <!-- Output Section -->
-        <div id="version_banner" class="deps-warning hidden"></div>
-
-        <section id="output-section">
-            <h2>Output Settings</h2>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label>Codec</label>
-                    <select id="codec">
-                        <option value="h265">H.265 (MP4)</option>
-                        <option value="h264">H.264 (MP4)</option>
-                        <option value="h264_h10">H.264 High 10 (10-bit MP4)</option>
-                        <option value="prores_422">ProRes 422</option>
-                        <option value="prores_422_lt">ProRes 422 LT</option>
-                        <option value="prores_444">ProRes 4444</option>
-                        <option value="qtrle">QuickTime Animation (QTRLE)</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
-                    <label>Colour Output</label>
-                    <select id="output_transform">
-                        <option value="Output - sRGB">sRGB (screen / review)</option>
-                        <option value="Output - Rec.709">Rec.709 (broadcast / delivery)</option>
-                    </select>
-                    <small class="hint">ACES output transform. Applies to EXR sources only.</small>
-                </div>
-
-                <div class="form-group" style="grid-column:1/-1">
-                    <label>Encoder settings</label>
-                    <div id="codec_info" style="font-family:monospace;font-size:0.9em;padding:6px 0;letter-spacing:0.02em"></div>
-                </div>
-
-                <div class="form-group">
-                    <label>Output FPS</label>
-                    <input type="text" id="frame_rate" value="24">
-                </div>
-
-                <!-- Codec Specifc: MP4 Bitrate -->
-                <div class="form-group codec-option show-mp4">
-                    <label>Bitrate (Mbps)</label>
-                    <input type="number" id="mp4_bitrate" value="30">
-                </div>
-
-                <!-- Codec Specific: ProRes options (hidden by default) -->
-                <div class="form-group codec-option show-prores hidden">
-                    <label>Quality (qscale)</label>
-                    <input type="number" id="prores_qscale" value="9">
-                </div>
-
-                <div class="form-group">
-                    <label>Desired Duration (sec)</label>
-                    <input type="number" id="desired_duration" value="15">
-                </div>
-
-                <div class="form-group">
-                    <label>Audio</label>
-                    <select id="audio_option">
-                        <option value="No Audio">No Audio</option>
-                        <option value="Blank Audio Track">Blank Audio Track</option>
-                    </select>
-                </div>
-
-                <!-- Reformat: off by default, reveals width/height when ticked -->
-                <div class="form-group full-width">
-                    <label class="checkbox-label" for="reformat_enabled">
-                        <input type="checkbox" id="reformat_enabled">
-                        <span>Reformat Resolution</span>
-                    </label>
-
-                    <div id="reformat-fields" class="reformat-fields hidden">
-                        <div class="form-group">
-                            <label for="reformat_width">Width</label>
-                            <input type="number" id="reformat_width" min="2" step="2"
-                                placeholder="e.g. 1920">
+        <!-- Main Dashboard Shell -->
+        <main class="dashboard-shell">
+            <!-- Left Column: Pipeline Configuration -->
+            <div class="config-column">
+                <!-- Section 1: Source Media -->
+                <section class="card" id="input-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="section-badge">01</span>
+                            <h2>Source Media</h2>
                         </div>
-                        <div class="form-group">
-                            <label for="reformat_height">Height</label>
-                            <input type="number" id="reformat_height" min="2" step="2"
-                                placeholder="auto (keeps aspect)">
+                        <span class="card-hint">EXR Sequences & Videos</span>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group full-width">
+                            <label for="input_folder">Input Sequence Folder</label>
+                            <div class="input-group">
+                                <input type="text" id="input_folder" placeholder="Select or paste folder path..." spellcheck="false">
+                                <button type="button" class="btn btn-secondary" id="browse-btn">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                    <span>Browse</span>
+                                </button>
+                            </div>
                         </div>
-                        <p id="reformat-hint" class="reformat-hint">
-                            Leave one field blank to derive it from the source aspect ratio.
-                        </p>
+
+                        <div class="form-group full-width">
+                            <label for="filename_pattern">Filename Pattern</label>
+                            <input type="text" id="filename_pattern" placeholder="e.g. shot_010_%04d.exr" spellcheck="false">
+                        </div>
+
+                        <!-- Rich Sequence Info Card -->
+                        <div id="sequence-summary-card" class="sequence-card full-width">
+                            <div class="sequence-card-header">
+                                <span class="sequence-title">Detected Sequence</span>
+                                <span id="sequence-format-badge" class="badge badge-neutral">No Sequence</span>
+                            </div>
+                            <div class="sequence-grid">
+                                <div class="seq-stat">
+                                    <span class="seq-label">Frame Range</span>
+                                    <span id="detected-range" class="seq-value">None</span>
+                                </div>
+                                <div class="seq-stat">
+                                    <span class="seq-label">Total Frames</span>
+                                    <span id="detected-frames" class="seq-value">-</span>
+                                </div>
+                                <div class="seq-stat">
+                                    <span class="seq-label">Source Resolution</span>
+                                    <span id="detected-res" class="seq-value">-</span>
+                                </div>
+                                <div class="seq-stat">
+                                    <span class="seq-label">Native Duration</span>
+                                    <span id="detected-duration" class="seq-value">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="source_frame_rate">Source FPS</label>
+                            <input type="text" id="source_frame_rate" value="24">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="frame_rate">Output FPS</label>
+                            <input type="text" id="frame_rate" value="24">
+                        </div>
                     </div>
-                </div>
+                </section>
 
-                <div class="form-group full-width">
-                    <label>Output Folder</label>
-                    <div class="input-group">
-                        <input type="text" id="output_folder" placeholder="Calculated automatically..." readonly>
-                        <!-- <button class="btn btn-secondary">Change</button> -->
+                <!-- Section 2: Codec & Delivery -->
+                <section class="card" id="output-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="section-badge">02</span>
+                            <h2>Encoding & Color</h2>
+                        </div>
+                        <span class="card-hint">ACES & Output Profiles</span>
                     </div>
-                </div>
 
-                <div class="form-group full-width">
-                    <label>Output Filename</label>
-                    <input type="text" id="output_filename" value="output.mp4">
-                </div>
-            </div>
-        </section>
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="codec">Output Codec</label>
+                            <select id="codec">
+                                <option value="h265">H.265 (MP4)</option>
+                                <option value="h264">H.264 (MP4)</option>
+                                <option value="h264_h10">H.264 High 10 (10-bit MP4)</option>
+                                <option value="prores_422">ProRes 422</option>
+                                <option value="prores_422_lt">ProRes 422 LT</option>
+                                <option value="prores_444">ProRes 4444</option>
+                                <option value="qtrle">QuickTime Animation (QTRLE)</option>
+                            </select>
+                        </div>
 
-        <!-- Action & Logs -->
-        <section id="process-section">
-            <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                <button id="run-btn" class="btn btn-primary btn-lg">Run Conversion</button>
-                <button id="stop-btn" class="btn btn-danger btn-lg" disabled>Stop</button>
+                        <div class="form-group">
+                            <label for="output_transform">Color Output (ACES ODT)</label>
+                            <select id="output_transform">
+                                <option value="Output - sRGB">sRGB (screen / review)</option>
+                                <option value="Output - Rec.709">Rec.709 (broadcast / delivery)</option>
+                            </select>
+                        </div>
+
+                        <!-- Live Encoder Specs Readout -->
+                        <div class="form-group full-width">
+                            <label>Active Encoder Specifications</label>
+                            <div id="codec_info" class="specs-chip-bar"></div>
+                        </div>
+
+                        <!-- Codec Specific: MP4 Bitrate -->
+                        <div class="form-group codec-option show-mp4">
+                            <label for="mp4_bitrate">Target Bitrate (Mbps)</label>
+                            <input type="number" id="mp4_bitrate" value="30" min="1" step="1">
+                        </div>
+
+                        <!-- Codec Specific: ProRes Quality -->
+                        <div class="form-group codec-option show-prores hidden">
+                            <label for="prores_qscale">ProRes Quality (qscale)</label>
+                            <input type="number" id="prores_qscale" value="9" min="1" max="31">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="desired_duration">Desired Duration (sec)</label>
+                            <input type="number" id="desired_duration" value="15" min="0.1" step="0.5">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="audio_option">Audio Handling</label>
+                            <select id="audio_option">
+                                <option value="No Audio">No Audio (-an)</option>
+                                <option value="Blank Audio Track">Blank Audio Track (anullsrc)</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 3: Resolution & Destination -->
+                <section class="card" id="destination-section">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="section-badge">03</span>
+                            <h2>Resolution & Destination</h2>
+                        </div>
+                        <span class="card-hint">Reformat & Storage</span>
+                    </div>
+
+                    <div class="form-grid">
+                        <!-- Reformat Box -->
+                        <div class="form-group full-width reformat-card">
+                            <div class="switch-row">
+                                <label class="switch" for="reformat_enabled">
+                                    <input type="checkbox" id="reformat_enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                <div class="switch-text">
+                                    <span class="switch-title">Reformat Output Resolution</span>
+                                    <span class="switch-subtitle">Linear float Lanczos3 filter on EXR; swscale on video</span>
+                                </div>
+                            </div>
+
+                            <div id="reformat-fields" class="reformat-fields hidden">
+                                <div class="reformat-inputs">
+                                    <div class="form-group">
+                                        <label for="reformat_width">Target Width</label>
+                                        <input type="number" id="reformat_width" min="2" step="2" placeholder="e.g. 1920">
+                                    </div>
+                                    <div class="reformat-separator">×</div>
+                                    <div class="form-group">
+                                        <label for="reformat_height">Target Height</label>
+                                        <input type="number" id="reformat_height" min="2" step="2" placeholder="auto (keeps aspect)">
+                                    </div>
+                                </div>
+                                <div class="reformat-preview-bar">
+                                    <p id="reformat-hint" class="reformat-hint">
+                                        Leave one field blank to derive it from the source aspect ratio.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label for="output_folder">Output Folder</label>
+                            <input type="text" id="output_folder" placeholder="Calculated automatically from input..." readonly spellcheck="false">
+                        </div>
+
+                        <div class="form-group full-width">
+                            <label for="output_filename">Output Filename</label>
+                            <input type="text" id="output_filename" value="output.mp4" spellcheck="false">
+                        </div>
+                    </div>
+                </section>
             </div>
 
-            <div class="progress-container">
-                <div id="progress-bar" class="progress-bar"></div>
-            </div>
+            <!-- Right Column: Conversion Monitor & Console -->
+            <div class="monitor-column">
+                <!-- Action & Progress Card -->
+                <section class="card monitor-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="section-badge pulse">●</span>
+                            <h2>Job Control</h2>
+                        </div>
+                        <div id="phase-badge" class="badge badge-info">Idle</div>
+                    </div>
 
-            <div style="margin-top: 15px;">
-                <div id="log-container"></div>
+                    <div class="action-buttons">
+                        <button id="run-btn" class="btn btn-primary btn-action">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                            <span>Run Conversion</span>
+                        </button>
+                        <button id="stop-btn" class="btn btn-danger btn-action" disabled>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="6" y="6" width="12" height="12"></rect>
+                            </svg>
+                            <span>Stop</span>
+                        </button>
+                    </div>
+
+                    <!-- Progress Tracking -->
+                    <div class="progress-block">
+                        <div class="progress-meta">
+                            <span class="progress-title" id="progress-phase-text">Ready to convert</span>
+                            <span class="progress-percent" id="progress-percent-text">0%</span>
+                        </div>
+                        <div class="progress-container">
+                            <div id="progress-bar" class="progress-bar"></div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Console & Log Terminal -->
+                <section class="card console-card">
+                    <div class="console-header">
+                        <div class="console-tabs">
+                            <button type="button" class="tab-btn active" data-filter="all">All</button>
+                            <button type="button" class="tab-btn" data-filter="output">Output</button>
+                            <button type="button" class="tab-btn" data-filter="error">Errors</button>
+                        </div>
+                        <div class="console-actions">
+                            <button type="button" id="autoscroll-btn" class="btn-icon active" title="Toggle Auto-scroll">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="7 13 12 18 17 13"></polyline>
+                                    <polyline points="7 6 12 11 17 6"></polyline>
+                                </svg>
+                                <span>Auto-scroll</span>
+                            </button>
+                            <button type="button" id="copy-log-btn" class="btn-icon" title="Copy Log to Clipboard">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                                <span>Copy</span>
+                            </button>
+                            <button type="button" id="clear-log-btn" class="btn-icon" title="Clear Console">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                </svg>
+                                <span>Clear</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="log-container" class="log-viewport"></div>
+                </section>
             </div>
-        </section>
+        </main>
     </div>
 
     <!-- File Browser Modal -->
     <div id="file-browser-modal" class="modal">
-        <div class="modal-content">
+        <div class="modal-backdrop"></div>
+        <div class="modal-dialog">
             <div class="modal-header">
-                <h3>Select Input Folder</h3>
-                <button id="close-modal" class="btn btn-secondary" style="padding: 5px 10px;">✕</button>
-            </div>
-            <div class="modal-header" style="background: var(--bg-color); padding: 10px;">
-                <div style="display: flex; gap: 10px; width: 100%;">
-                    <button id="nav-up" class="btn btn-secondary">↑ Up</button>
-                    <input type="text" id="browser-path" style="flex: 1;" readonly>
+                <div class="modal-title-wrap">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                    <h3>Select Image Sequence or Folder</h3>
                 </div>
+                <button type="button" id="close-modal" class="btn-close" aria-label="Close modal">✕</button>
             </div>
+
+            <!-- Path Navigation & Breadcrumbs -->
+            <div class="modal-nav">
+                <div class="nav-controls">
+                    <button type="button" id="nav-up" class="btn btn-secondary btn-sm" title="Go up one folder">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="12" y1="19" x2="12" y2="5"></line>
+                            <polyline points="5 12 12 5 19 12"></polyline>
+                        </svg>
+                        <span>Up</span>
+                    </button>
+                    <!-- Clickable Breadcrumbs bar -->
+                    <div id="browser-breadcrumbs" class="breadcrumbs-container"></div>
+                </div>
+
+                <div class="search-wrap">
+                    <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="8"></circle>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                    <input type="text" id="browser-search" placeholder="Filter files or sequences..." spellcheck="false">
+                </div>
+
+                <!-- Hidden for backwards compatibility with test harnesses/scripts -->
+                <input type="text" id="browser-path" class="hidden" readonly>
+            </div>
+
             <div class="modal-body">
                 <ul id="file-list" class="file-list">
-                    <!-- Items injected here -->
+                    <!-- File items injected dynamically -->
                 </ul>
             </div>
+
             <div class="modal-footer">
-                <button id="select-folder-btn" class="btn btn-primary">Select Current Folder</button>
+                <div class="modal-hint">
+                    <span>💡 Tip: Click any frame in a sequence to select the whole sequence.</span>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" id="select-folder-btn" class="btn btn-primary">
+                        Select Current Folder
+                    </button>
+                </div>
             </div>
         </div>
     </div>
 
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
     <!-- Scripts -->
-    <script src="/static/js/api.js?v=3"></script>
-    <script src="/static/js/ui.js?v=3"></script>
+    <script src="/static/js/api.js?v=4"></script>
+    <script src="/static/js/ui.js?v=4"></script>
 </body>
 
 </html>

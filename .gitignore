@@ -19,3 +19,6 @@ ffmpeg_ui.log
 _archive/
 __pycache__/
 *.pyc
+
+# Playwright MCP session artifacts (screenshots, console logs)
+.playwright-mcp/

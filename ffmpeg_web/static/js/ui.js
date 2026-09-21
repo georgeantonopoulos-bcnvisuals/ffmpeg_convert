@@ -6,7 +6,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         frameRange: { start: 0, end: 0 },
         sourceRes: { width: null, height: null },
         filenameCustom: false,
-        isConverting: false
+        isConverting: false,
+        transformCustom: false,
+        rawBrowserItems: [],
+        autoScrollLogs: true,
+        activeLogFilter: 'all'
     };
 
     // --- DOM Elements ---
@@ -15,6 +19,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         browseBtn: document.getElementById('browse-btn'),
         filenamePattern: document.getElementById('filename_pattern'),
         detectedRange: document.getElementById('detected-range'),
+        detectedFrames: document.getElementById('detected-frames'),
+        detectedRes: document.getElementById('detected-res'),
+        detectedDuration: document.getElementById('detected-duration'),
+        sequenceFormatBadge: document.getElementById('sequence-format-badge'),
         sourceFps: document.getElementById('source_frame_rate'),
 
         codec: document.getElementById('codec'),
@@ -39,29 +47,80 @@ document.addEventListener('DOMContentLoaded', async () => {
         runBtn: document.getElementById('run-btn'),
         stopBtn: document.getElementById('stop-btn'),
         progressBar: document.getElementById('progress-bar'),
+        progressPhaseText: document.getElementById('progress-phase-text'),
+        progressPercentText: document.getElementById('progress-percent-text'),
+        phaseBadge: document.getElementById('phase-badge'),
         logContainer: document.getElementById('log-container'),
         statusIndicator: document.getElementById('status-indicator'),
+        statusPill: document.getElementById('status-pill'),
         depsWarning: document.getElementById('deps-warning'),
+
+        // Console Controls
+        consoleTabs: document.querySelectorAll('.console-tabs .tab-btn'),
+        autoscrollBtn: document.getElementById('autoscroll-btn'),
+        copyLogBtn: document.getElementById('copy-log-btn'),
+        clearLogBtn: document.getElementById('clear-log-btn'),
 
         // Modal
         modal: document.getElementById('file-browser-modal'),
         closeModal: document.getElementById('close-modal'),
         navUp: document.getElementById('nav-up'),
+        browserBreadcrumbs: document.getElementById('browser-breadcrumbs'),
+        browserSearch: document.getElementById('browser-search'),
         browserPath: document.getElementById('browser-path'),
         fileList: document.getElementById('file-list'),
         selectFolderBtn: document.getElementById('select-folder-btn'),
 
-        codecOptions: document.querySelectorAll('.codec-option')
+        codecOptions: document.querySelectorAll('.codec-option'),
+        toastContainer: document.getElementById('toast-container')
     };
+
+    // --- Toast Notification System ---
+    function showToast(title, message = '', type = 'info', duration = 4000) {
+        if (!dom.toastContainer) return;
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+
+        const icons = {
+            info: 'ℹ️',
+            success: '✅',
+            warning: '⚠️',
+            error: '🛑'
+        };
+
+        toast.innerHTML = `
+            <span class="toast-icon">${icons[type] || 'ℹ️'}</span>
+            <div class="toast-content">
+                <div class="toast-title">${title}</div>
+                ${message ? `<div class="toast-message">${message}</div>` : ''}
+            </div>
+            <button type="button" class="toast-close" aria-label="Close">✕</button>
+        `;
+
+        const closeBtn = toast.querySelector('.toast-close');
+        const dismiss = () => {
+            toast.classList.add('toast-hiding');
+            setTimeout(() => toast.remove(), 200);
+        };
+
+        closeBtn.addEventListener('click', dismiss);
+        dom.toastContainer.appendChild(toast);
+
+        if (duration > 0) {
+            setTimeout(dismiss, duration);
+        }
+    }
 
     // --- Initialization ---
     async function init() {
-        log("Use 'Browse' to select an input sequence folder.", "info");
+        log("BCN FFMpeg Converter ready. Use 'Browse' to load a sequence.", "info");
         await loadSettings();
         setupWebSocket();
         await checkDependencies();
         await loadCodecInfo();
         checkVersion();
+        
         // Cheap poll plus a check whenever the tab regains focus, so a
         // deploy that happens while this page is open is noticed.
         setInterval(checkVersion, 30000);
@@ -74,40 +133,80 @@ document.addEventListener('DOMContentLoaded', async () => {
         const ws = new WebSocket(`${protocol}://${window.location.host}/ws/status`);
 
         ws.onopen = () => {
-            dom.statusIndicator.textContent = "Connected";
-            dom.statusIndicator.className = "log-success";
+            updateConnectionStatus(true);
         };
 
         ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            handleWsMessage(msg);
+            try {
+                const msg = JSON.parse(event.data);
+                handleWsMessage(msg);
+            } catch (err) {
+                console.error("Error parsing websocket message:", err);
+            }
         };
 
         ws.onclose = () => {
-            dom.statusIndicator.textContent = "Disconnected";
-            dom.statusIndicator.className = "log-error";
+            updateConnectionStatus(false);
             setTimeout(setupWebSocket, 3000); // Reconnect
         };
+    }
+
+    function updateConnectionStatus(connected) {
+        if (connected) {
+            dom.statusIndicator.textContent = state.isConverting ? "Processing..." : "Ready";
+            dom.statusPill.className = state.isConverting ? "status-pill status-processing" : "status-pill status-ready";
+        } else {
+            dom.statusIndicator.textContent = "Disconnected";
+            dom.statusPill.className = "status-pill status-error";
+        }
     }
 
     function handleWsMessage(msg) {
         if (msg.type === 'output' || msg.type === 'error') {
             log(msg.content, msg.type);
+
+            // Detect phase changes from backend log messages
+            if (msg.content.includes("Starting EXR Conversion Phase")) {
+                updatePhase("EXR Pre-pass (oiiotool)", "badge-info");
+            } else if (msg.content.includes("EXR Phase Complete") || msg.content.includes("Proceeding to FFmpeg video encoding") || msg.content.includes("Starting FFmpeg process")) {
+                updatePhase("FFmpeg Encoding", "badge-info");
+            }
         } else if (msg.type === 'progress') {
             const pct = parseFloat(msg.content);
             if (!isNaN(pct)) {
-                dom.progressBar.style.width = `${pct}%`;
+                const formattedPct = Math.min(Math.max(pct, 0), 100);
+                dom.progressBar.style.width = `${formattedPct}%`;
+                if (dom.progressPercentText) {
+                    dom.progressPercentText.textContent = `${Math.round(formattedPct)}%`;
+                }
             }
         } else if (msg.type === 'job_status') {
             if (msg.content === 'idle') {
                 setConvertingState(false);
+                updatePhase("Idle", "badge-neutral");
             }
         } else if (msg.type === 'success') {
             log(msg.content, 'success');
+            showToast("Conversion Succeeded", msg.content, "success");
             setConvertingState(false);
+            updatePhase("Complete", "badge-success");
+            if (dom.progressPercentText) dom.progressPercentText.textContent = "100%";
+            dom.progressBar.style.width = '100%';
         } else if (msg.type === 'cancelled') {
             log(msg.content, 'error');
+            showToast("Conversion Cancelled", "Job was cancelled by user.", "warning");
             setConvertingState(false);
+            updatePhase("Cancelled", "badge-neutral");
+        }
+    }
+
+    function updatePhase(phaseName, badgeClass = "badge-info") {
+        if (dom.phaseBadge) {
+            dom.phaseBadge.textContent = phaseName;
+            dom.phaseBadge.className = `badge ${badgeClass}`;
+        }
+        if (dom.progressPhaseText) {
+            dom.progressPhaseText.textContent = phaseName;
         }
     }
 
@@ -119,12 +218,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (isConverting) {
             dom.statusIndicator.textContent = "Processing...";
-            dom.statusIndicator.className = "log-info";
-            dom.stopBtn.style.opacity = 1;
+            dom.statusPill.className = "status-pill status-processing";
+            updatePhase("Processing...", "badge-info");
         } else {
             dom.statusIndicator.textContent = "Ready";
-            dom.statusIndicator.className = "log-success";
-            dom.progressBar.style.width = '0%';
+            dom.statusPill.className = "status-pill status-ready";
+            if (!dom.phaseBadge || dom.phaseBadge.textContent === "Processing...") {
+                updatePhase("Idle", "badge-neutral");
+            }
         }
     }
 
@@ -132,11 +233,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function loadSettings() {
         try {
             const settings = await API.getSettings();
-            // Apply defaults if fields are empty
             if (settings.last_input_folder) state.inputFolder = settings.last_input_folder;
             if (settings.last_output_folder) dom.outputFolder.value = settings.last_output_folder;
 
-            // Set input values
             if (dom.inputFolder.value === "") dom.inputFolder.value = settings.last_input_folder || "";
             if (dom.outputFolder.value === "") dom.outputFolder.value = settings.last_output_folder || "";
 
@@ -190,11 +289,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await API.saveSettings(settings);
     }
 
-    // --- Reformat ---
-    // Mirrors core/reformat.py so the preview always matches what the
-    // backend will actually do. Rounding up (never down) means the output
-    // is never smaller than what was asked for, and even dimensions are
-    // mandatory for yuv420p chroma subsampling.
+    // --- Reformat Calculations ---
     function evenUp(value) {
         const rounded = Math.round(value);
         if (rounded < 2) return 2;
@@ -267,9 +362,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // Mirrors default_output_transform_for_codec() on the backend, which
-    // re-derives this when the client sends nothing, so the two cannot
-    // drift into producing different pixels.
     function defaultTransformForCodec(codec) {
         return codec.startsWith('prores') ? 'Output - Rec.709' : 'Output - sRGB';
     }
@@ -302,7 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     dom.depsWarning.classList.remove('hidden');
                 }
                 dom.runBtn.disabled = true;
-                log(`Dependencies not healthy: ${issues}`, 'error');
+                log(`Dependencies warning: ${issues}`, 'error');
             } else if (dom.depsWarning) {
                 dom.depsWarning.textContent = '';
                 dom.depsWarning.classList.add('hidden');
@@ -313,57 +405,129 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
-    // --- File Browser ---
+    // --- File Browser & Breadcrumbs ---
     async function openFileBrowser(startPath) {
         state.browsingPath = startPath || dom.inputFolder.value || ".";
-        await refreshBrowser();
         dom.modal.style.display = 'flex';
+        await refreshBrowser();
+    }
+
+    function renderBreadcrumbs(currentPath) {
+        if (!dom.browserBreadcrumbs) return;
+        dom.browserBreadcrumbs.innerHTML = '';
+
+        const normalized = currentPath.startsWith('/') ? currentPath : '/' + currentPath;
+        const parts = normalized.split('/').filter(Boolean);
+
+        // Root crumb
+        const rootCrumb = document.createElement('span');
+        rootCrumb.className = 'crumb-segment';
+        rootCrumb.textContent = '/';
+        rootCrumb.onclick = () => {
+            state.browsingPath = '/';
+            refreshBrowser();
+        };
+        dom.browserBreadcrumbs.appendChild(rootCrumb);
+
+        let accumulated = '';
+        parts.forEach((part, index) => {
+            const sep = document.createElement('span');
+            sep.className = 'crumb-separator';
+            sep.textContent = '/';
+            dom.browserBreadcrumbs.appendChild(sep);
+
+            accumulated += '/' + part;
+            const crumb = document.createElement('span');
+            crumb.className = 'crumb-segment';
+            crumb.textContent = part;
+            const targetPath = accumulated;
+            crumb.onclick = () => {
+                state.browsingPath = targetPath;
+                refreshBrowser();
+            };
+            dom.browserBreadcrumbs.appendChild(crumb);
+        });
+
+        // Scroll breadcrumbs to end
+        dom.browserBreadcrumbs.scrollLeft = dom.browserBreadcrumbs.scrollWidth;
     }
 
     async function refreshBrowser() {
-        dom.fileList.innerHTML = '<li class="file-item">Loading...</li>';
+        dom.fileList.innerHTML = '<li class="file-item"><div class="file-item-main"><span class="file-item-name">Loading directory contents...</span></div></li>';
         try {
             const data = await API.browse(state.browsingPath);
             state.browsingPath = data.current_path;
             dom.browserPath.value = data.current_path;
+            renderBreadcrumbs(data.current_path);
 
-            dom.fileList.innerHTML = '';
-
-            if (data.items.length === 0) {
-                dom.fileList.innerHTML = '<li class="file-item" style="color: grey;">Empty directory</li>';
-                return;
-            }
-
-            data.items.forEach(item => {
-                const li = document.createElement('li');
-                li.className = 'file-item';
-                li.innerHTML = `
-                    <span class="file-icon">${item.is_dir ? '📁' : '📄'}</span>
-                    <span>${item.name}</span>
-                `;
-                li.onclick = () => {
-                    if (item.is_dir) {
-                        state.browsingPath = item.path;
-                        refreshBrowser();
-                    } else {
-                        // Clicking any frame picks the whole sequence it
-                        // belongs to; the backend resolves the file to its
-                        // folder and returns that sequence first.
-                        handleFrameSelection(item.path);
-                    }
-                };
-                if (!item.is_dir) {
-                    li.title = "Select this sequence";
-                }
-                dom.fileList.appendChild(li);
-            });
+            state.rawBrowserItems = data.items || [];
+            applyBrowserFilter();
         } catch (e) {
-            dom.fileList.innerHTML = `<li class="file-item log-error">Error: ${e.message}</li>`;
+            dom.fileList.innerHTML = `<li class="file-item"><div class="file-item-main"><span class="file-item-name log-error">Error: ${e.message}</span></div></li>`;
         }
     }
 
-    // Parent directory of a POSIX path. The studio worktree has the same
-    // helper; kept identical so the two front-ends stay comparable.
+    function getFileIconAndTag(name, isDir) {
+        if (isDir) {
+            return { icon: '📁', tag: 'DIR' };
+        }
+        const lower = name.toLowerCase();
+        if (lower.endsWith('.exr')) {
+            return { icon: '🎞️', tag: 'EXR' };
+        }
+        if (lower.endsWith('.mov') || lower.endsWith('.mp4') || lower.endsWith('.mkv')) {
+            return { icon: '🎬', tag: 'VIDEO' };
+        }
+        if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.tiff') || lower.endsWith('.tif') || lower.endsWith('.dpx')) {
+            return { icon: '🖼️', tag: 'IMAGE' };
+        }
+        return { icon: '📄', tag: 'FILE' };
+    }
+
+    function applyBrowserFilter() {
+        const query = (dom.browserSearch ? dom.browserSearch.value.trim().toLowerCase() : '');
+        const items = state.rawBrowserItems.filter(item => {
+            if (!query) return true;
+            return item.name.toLowerCase().includes(query);
+        });
+
+        dom.fileList.innerHTML = '';
+
+        if (items.length === 0) {
+            dom.fileList.innerHTML = '<li class="file-item"><div class="file-item-main"><span class="file-item-name" style="color: var(--text-muted);">No matching items found</span></div></li>';
+            return;
+        }
+
+        items.forEach(item => {
+            const li = document.createElement('li');
+            li.className = 'file-item';
+            const { icon, tag } = getFileIconAndTag(item.name, item.is_dir);
+
+            li.innerHTML = `
+                <div class="file-item-main">
+                    <span class="file-item-icon">${icon}</span>
+                    <span class="file-item-name" title="${item.name}">${item.name}</span>
+                </div>
+                <span class="file-item-tag">${tag}</span>
+            `;
+
+            li.onclick = () => {
+                if (item.is_dir) {
+                    state.browsingPath = item.path;
+                    if (dom.browserSearch) dom.browserSearch.value = '';
+                    refreshBrowser();
+                } else {
+                    handleFrameSelection(item.path);
+                }
+            };
+
+            if (!item.is_dir) {
+                li.title = "Click to select this sequence";
+            }
+            dom.fileList.appendChild(li);
+        });
+    }
+
     function getParentPath(path) {
         const parts = String(path).split('/').filter(Boolean);
         parts.pop();
@@ -377,8 +541,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             dom.outputFolder.value = getParentPath(folder);
         }
         dom.modal.style.display = 'none';
-        // Pass the frame itself, not the folder: that is what tells the
-        // backend which sequence was meant when a folder holds several.
+        showToast("Sequence Selected", `Probing sequence in ${folder}...`, "info", 2500);
         await scanForSequences(framePath);
         saveCurrentSettings();
     }
@@ -388,14 +551,57 @@ document.addEventListener('DOMContentLoaded', async () => {
         dom.inputFolder.value = selectedPath;
         dom.modal.style.display = 'none';
 
-        // Auto-set output folder to parent of input
-        // Using basic string manipulation for path
-        const parent = selectedPath.split('/').slice(0, -1).join('/');
+        const parent = getParentPath(selectedPath);
         dom.outputFolder.value = parent || selectedPath;
 
-        // Scan for sequences
+        showToast("Folder Selected", `Scanning ${selectedPath}...`, "info", 2500);
         await scanForSequences(selectedPath);
         saveCurrentSettings();
+    }
+
+    function updateSequenceSummaryCard(seq) {
+        if (!seq) {
+            if (dom.detectedRange) dom.detectedRange.textContent = "None";
+            if (dom.detectedFrames) dom.detectedFrames.textContent = "-";
+            if (dom.detectedRes) dom.detectedRes.textContent = "-";
+            if (dom.detectedDuration) dom.detectedDuration.textContent = "-";
+            if (dom.sequenceFormatBadge) {
+                dom.sequenceFormatBadge.textContent = "No Sequence";
+                dom.sequenceFormatBadge.className = "badge badge-neutral";
+            }
+            return;
+        }
+
+        const totalFrames = (seq.end !== undefined && seq.start !== undefined) 
+            ? (seq.end - seq.start + 1) 
+            : (seq.count || 0);
+
+        if (dom.detectedRange) dom.detectedRange.textContent = seq.range_string || `${seq.start}-${seq.end}`;
+        if (dom.detectedFrames) dom.detectedFrames.textContent = `${totalFrames} frames`;
+        
+        if (dom.detectedRes) {
+            if (seq.width && seq.height) {
+                dom.detectedRes.textContent = `${seq.width} \u00d7 ${seq.height}`;
+            } else {
+                dom.detectedRes.textContent = "Auto / Unknown";
+            }
+        }
+
+        const fps = parseFloat(dom.sourceFps.value) || 24;
+        const nativeSecs = totalFrames > 0 ? (totalFrames / fps).toFixed(2) : "0.00";
+        if (dom.detectedDuration) dom.detectedDuration.textContent = `${nativeSecs}s (@ ${fps}fps)`;
+
+        if (dom.sequenceFormatBadge) {
+            const isExr = (seq.pattern || "").toLowerCase().endsWith('.exr');
+            if (isExr) {
+                dom.sequenceFormatBadge.textContent = "EXR (ACEScg)";
+                dom.sequenceFormatBadge.className = "badge badge-info";
+            } else {
+                const ext = (seq.pattern || "").split('.').pop().toUpperCase();
+                dom.sequenceFormatBadge.textContent = ext || "IMAGE SEQ";
+                dom.sequenceFormatBadge.className = "badge badge-neutral";
+            }
+        }
     }
 
     async function scanForSequences(path) {
@@ -405,70 +611,199 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (sequences.length === 0) {
                 log("No image sequences detected.", 'error');
                 dom.filenamePattern.value = "";
-                dom.detectedRange.textContent = "None";
                 state.sourceRes = { width: null, height: null };
+                updateSequenceSummaryCard(null);
                 updateReformatUI();
+                showToast("No Sequence Found", "No image sequence detected in the selected folder.", "warning");
                 return;
             }
 
-            // Default to first found sequence
             const seq = sequences[0];
             dom.filenamePattern.value = seq.pattern;
             state.frameRange = { start: seq.start, end: seq.end };
             state.sourceRes = { width: seq.width || null, height: seq.height || null };
-            dom.detectedRange.textContent = seq.range_string;
-            if (seq.width && seq.height) {
-                dom.detectedRange.textContent += ` \u2014 ${seq.width} \u00d7 ${seq.height}`;
-            }
+            
+            updateSequenceSummaryCard(seq);
             updateReformatUI();
 
-            // Auto-name the output after the sequence, but never overwrite a
-            // name the user typed themselves -- having a custom delivery name
-            // clobbered on every folder pick is exactly the retyping this is
-            // meant to stop. Guard the extension match too: a filename with no
-            // extension used to throw here and abort the scan.
             if (!state.filenameCustom) {
                 const seqName = seq.head.replace(/[._]$/, "");
                 const extMatch = dom.outputFilename.value.match(/\.\w+$/);
                 dom.outputFilename.value = `${seqName}${extMatch ? extMatch[0] : ".mp4"}`;
             }
 
-            log(`Detected sequence: ${seq.pattern} ${seq.range_string}`, 'success');
+            log(`Detected sequence: ${seq.pattern} [${seq.range_string}]`, 'success');
+            showToast("Sequence Ready", `${seq.pattern} (${seq.range_string})`, "success", 3000);
 
         } catch (e) {
             log(`Scan failed: ${e.message}`, 'error');
+            showToast("Scan Error", e.message, "error");
         }
     }
 
-    // --- Logging ---
+    // --- Logging & Console Toolbar ---
     function log(msg, type = 'output') {
         const div = document.createElement('div');
         div.className = `log-entry log-${type}`;
-        div.textContent = msg; // Text content prevents XSS
+        div.setAttribute('data-type', type);
+        div.textContent = msg;
+
+        // Apply active filter
+        if (state.activeLogFilter !== 'all' && state.activeLogFilter !== type) {
+            div.style.display = 'none';
+        }
+
         dom.logContainer.appendChild(div);
-        dom.logContainer.scrollTop = dom.logContainer.scrollHeight;
+
+        if (state.autoScrollLogs) {
+            dom.logContainer.scrollTop = dom.logContainer.scrollHeight;
+        }
+    }
+
+    function setLogFilter(filterType) {
+        state.activeLogFilter = filterType;
+        dom.consoleTabs.forEach(tab => {
+            tab.classList.toggle('active', tab.getAttribute('data-filter') === filterType);
+        });
+
+        const entries = dom.logContainer.querySelectorAll('.log-entry');
+        entries.forEach(entry => {
+            const entryType = entry.getAttribute('data-type');
+            if (filterType === 'all' || entryType === filterType) {
+                entry.style.display = 'block';
+            } else {
+                entry.style.display = 'none';
+            }
+        });
     }
 
     // --- Event Listeners ---
     dom.browseBtn.addEventListener('click', () => openFileBrowser(dom.inputFolder.value));
+
+    // Allow pasting or typing a path directly into the input folder field
+    // Mirrors the extension filter in core/explorer.py. A pasted path ending
+    // in one of these is a frame, not a folder.
+    const MEDIA_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.exr', '.mov', '.mp4', '.tiff'];
+
+    function looksLikeMediaFile(path) {
+        const name = path.split('/').pop() || '';
+        const dot = name.lastIndexOf('.');
+        return dot > 0 && MEDIA_EXTENSIONS.includes(name.slice(dot).toLowerCase());
+    }
+
+    async function handleManualPathInput() {
+        const raw = dom.inputFolder.value.trim();
+        if (!raw) return;
+
+        // Pasting a frame path is supported, but the field must end up holding
+        // the folder: its value is persisted as last_input_folder, which seeds
+        // the file browser on the next launch. Storing a file there makes
+        // Browse fail until the user edits the field by hand. This mirrors
+        // handleFrameSelection so a pasted frame behaves exactly like the same
+        // frame picked in the browser.
+        const isFrame = looksLikeMediaFile(raw);
+        const folder = isFrame ? getParentPath(raw) : raw;
+
+        // Auto-populate output folder if empty
+        if (!dom.outputFolder.value) {
+            dom.outputFolder.value = getParentPath(folder);
+        }
+
+        // Scan with the frame -- it tells the backend which sequence was meant
+        // when a folder holds several -- but display and persist the folder.
+        await scanForSequences(raw);
+        if (isFrame) {
+            dom.inputFolder.value = folder;
+        }
+        saveCurrentSettings();
+    }
+
+    dom.inputFolder.addEventListener('change', handleManualPathInput);
+    dom.inputFolder.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            handleManualPathInput();
+        }
+    });
+
     dom.closeModal.addEventListener('click', () => dom.modal.style.display = 'none');
+    
+    // Close modal on backdrop click
+    const backdrop = dom.modal.querySelector('.modal-backdrop');
+    if (backdrop) {
+        backdrop.addEventListener('click', () => dom.modal.style.display = 'none');
+    }
+
+    // Keyboard shortcuts
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && dom.modal.style.display === 'flex') {
+            dom.modal.style.display = 'none';
+        }
+    });
+
     dom.selectFolderBtn.addEventListener('click', handleFolderSelection);
 
     dom.navUp.addEventListener('click', () => {
-        // Go up one level
-        // Naive path manipulation, but usually fine for linux paths
         const parts = state.browsingPath.split('/').filter(p => p);
         if (parts.length > 0) {
             parts.pop();
-            // Handle root
             const newPath = parts.length === 0 ? '/' : '/' + parts.join('/');
             state.browsingPath = newPath;
+            if (dom.browserSearch) dom.browserSearch.value = '';
             refreshBrowser();
         }
     });
 
+    if (dom.browserSearch) {
+        dom.browserSearch.addEventListener('input', applyBrowserFilter);
+    }
+
+    // Console tabs
+    dom.consoleTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            setLogFilter(tab.getAttribute('data-filter'));
+        });
+    });
+
+    // Auto-scroll toggle
+    if (dom.autoscrollBtn) {
+        dom.autoscrollBtn.addEventListener('click', () => {
+            state.autoScrollLogs = !state.autoScrollLogs;
+            dom.autoscrollBtn.classList.toggle('active', state.autoScrollLogs);
+            if (state.autoScrollLogs) {
+                dom.logContainer.scrollTop = dom.logContainer.scrollHeight;
+            }
+        });
+    }
+
+    // Copy logs
+    if (dom.copyLogBtn) {
+        dom.copyLogBtn.addEventListener('click', async () => {
+            const text = Array.from(dom.logContainer.querySelectorAll('.log-entry'))
+                .map(el => el.textContent)
+                .join('');
+            if (!text) {
+                showToast("Console Empty", "No logs to copy.", "info");
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(text);
+                showToast("Copied to Clipboard", "Console logs copied successfully.", "success", 2000);
+            } catch (err) {
+                showToast("Copy Failed", "Unable to access clipboard.", "error");
+            }
+        });
+    }
+
+    // Clear logs
+    if (dom.clearLogBtn) {
+        dom.clearLogBtn.addEventListener('click', () => {
+            dom.logContainer.innerHTML = '';
+            log("Console cleared.", "info");
+        });
+    }
+
     dom.codec.addEventListener('change', updateCodecOptions);
-    // Once the user picks a transform we stop overriding it on codec change.
     dom.outputTransform.addEventListener('change', () => {
         state.transformCustom = true;
         renderCodecInfo();
@@ -483,7 +818,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             codecInfoCache = await res.json();
             renderCodecInfo();
         } catch (e) {
-            // The readout is advisory; never let it break the page.
+            // Advisory readout; do not break page
         }
     }
 
@@ -491,28 +826,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function renderCodecInfo() {
         const info = codecInfoCache[dom.codec.value];
-        dom.codecInfo.textContent = '';
-        if (!info) { return; }
+        dom.codecInfo.innerHTML = '';
+        if (!info) return;
 
-        const levelText = info.level ? 'L ' + info.level : '';
-        const parts = [info.encoder];
-        if (info.profile) parts.push(PROFILE_LABELS[info.profile] || info.profile);
-        if (levelText) parts.push(levelText);
-        if (info.pix_fmt) parts.push(info.pix_fmt);
-        parts.push(dom.outputTransform.value.replace('Output - ', ''));
+        const levelText = info.level ? 'Level ' + info.level : '';
+        const items = [
+            { label: 'Encoder', value: info.encoder },
+            { label: 'Profile', value: info.profile ? (PROFILE_LABELS[info.profile] || info.profile) : null },
+            { label: 'Level', value: levelText, highlight: true },
+            { label: 'Format', value: info.pix_fmt },
+            { label: 'Transform', value: dom.outputTransform.value.replace('Output - ', '') }
+        ].filter(item => Boolean(item.value));
 
-        // Built as nodes rather than innerHTML so the level can be
-        // emphasised without ever interpreting API text as markup.
-        parts.forEach((text, i) => {
-            if (i) dom.codecInfo.appendChild(document.createTextNode('  \u00b7  '));
-            const span = document.createElement('span');
-            span.textContent = text;
-            if (levelText && text === levelText) {
-                // The number people read off for delivery QC.
-                span.style.fontWeight = '700';
-                span.style.color = '#f18d79';
-            }
-            dom.codecInfo.appendChild(span);
+        items.forEach(item => {
+            const chip = document.createElement('span');
+            chip.className = `spec-chip ${item.highlight ? 'spec-chip-highlight' : ''}`;
+            chip.textContent = `${item.label}: ${item.value}`;
+            dom.codecInfo.appendChild(chip);
         });
     }
 
@@ -522,13 +852,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             const v = await res.json();
             dom.versionBanner.textContent = v.message || '';
             dom.versionBanner.classList.toggle('hidden', !v.stale);
+            if (v.stale) {
+                showToast("Build Updated", "A new code version is deployed on disk. Please restart or refresh.", "warning", 8000);
+            }
         } catch (e) {
-            // Offline or mid-restart; say nothing rather than cry wolf.
+            // Offline or mid-restart
         }
     }
 
-    // Typing in the filename marks it as the user's own, so folder
-    // selection stops renaming it. Persisted, so it survives a restart.
     dom.outputFilename.addEventListener('input', () => {
         state.filenameCustom = true;
     });
@@ -543,9 +874,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         field.addEventListener('change', saveCurrentSettings);
     });
 
+    dom.sourceFps.addEventListener('input', () => {
+        updateSequenceSummaryCard({
+            start: state.frameRange.start,
+            end: state.frameRange.end,
+            width: state.sourceRes.width,
+            height: state.sourceRes.height,
+            pattern: dom.filenamePattern.value,
+            range_string: dom.detectedRange.textContent
+        });
+    });
+
+    // --- Run Conversion ---
     dom.runBtn.addEventListener('click', async () => {
         if (!dom.inputFolder.value || !dom.outputFolder.value) {
-            alert("Please select input and output folders.");
+            showToast("Missing Folder", "Please select input and output sequence folders.", "error");
             return;
         }
 
@@ -557,7 +900,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 state.sourceRes.height
             );
             if (check.error) {
-                alert(`Reformat: ${check.error}`);
+                showToast("Reformat Error", check.error, "error");
                 return;
             }
         }
@@ -584,28 +927,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
 
         if (dom.codec.value.startsWith('prores')) {
-            // Map dropdown value to profile index logic if needed
-            // Simple mapping based on value names
             if (config.prores_profile === '422') config.prores_profile = '2';
             if (config.prores_profile === '422_lt') config.prores_profile = '1';
             if (config.prores_profile === '444') config.prores_profile = '4';
         }
 
         setConvertingState(true);
-        dom.logContainer.innerHTML = ''; // Clear logs
-        log("Starting job...", "info");
+        dom.logContainer.innerHTML = '';
+        dom.progressBar.style.width = '0%';
+        if (dom.progressPercentText) dom.progressPercentText.textContent = '0%';
+
+        log("Starting conversion job...", "info");
+        showToast("Job Started", `Converting to ${config.codec}...`, "info", 3000);
         await saveCurrentSettings();
 
         try {
             await API.startConversion(config);
         } catch (e) {
             log(`Failed to start job: ${e.message}`, 'error');
+            showToast("Conversion Failed", e.message, "error");
             setConvertingState(false);
         }
     });
 
     dom.stopBtn.addEventListener('click', async () => {
         log('Stop requested by user...', 'info');
+        showToast("Cancelling Job", "Sending cancellation signal...", "warning", 3000);
         await API.cancelConversion();
     });
 
