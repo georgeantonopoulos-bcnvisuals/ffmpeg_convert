@@ -82,6 +82,7 @@ ffmpeg_web/
 │   ├── exr_handler.py    # EXR → PNG via oiiotool + OCIO
 │   ├── explorer.py       # File browser + clique sequence detection
 │   ├── reformat.py       # Output resolution: probe, aspect math, filter settings
+│   ├── timing.py         # Frame rates, exact durations, retime (Fraction maths)
 │   ├── version.py        # Build stamp / stale-code detection
 │   └── deps.py           # Dependency health checks (/api/deps)
 ├── static/               # index.html, style.css, js/, images/
@@ -95,7 +96,7 @@ will silently import the wrong one. Run suites with `python -m ffmpeg_web.test_<
 from the lineage's own directory, and **assert `ffmpeg_web.__file__`** points at the
 lineage you mean before trusting a result. `test_api` needs a running server; the
 rest (`test_codec`, `test_reformat`, `test_explorer`, `test_colorspace`,
-`test_version`, `test_cache`) do not.
+`test_version`, `test_cache`, `test_timing`) do not.
 
 ---
 
@@ -126,3 +127,12 @@ Replaced the Tkinter app, which is now legacy.
 - H.264 level declared correctly; user-selectable level (5.0 / 5.1 / 6.1).
 - Encoder settings shown in the UI; stale running code detected via `core/version.py`.
 - UI modernised; BCN logo restored (the logo originates in the studio lineage).
+- **Frame rate & duration** (`core/timing.py`): FPS fields are dropdowns
+  (23.976, 24, 25, 29.97, 30, 50, 59.94, 60) sending exact rationals
+  (`24000/1001`). The content is always retimed to *exactly* the requested
+  seconds. A file holds whole frames, so at whole rates it is exact (10 s @
+  30 = 300 frames = 10.000 s) and at NTSC the partial last frame is dropped
+  (10 s @ 29.97 = 299 frames = 9.977 s), with a warning in the UI and log.
+  **Out-of-home players that demand an exact duration need 25/30 fps** —
+  no FFmpeg flag can make NTSC hit whole seconds. `-video_track_timescale`
+  makes each *frame* exact, not the total.

@@ -18,7 +18,14 @@ import tempfile
 
 from .core import reformat
 from .core.exr_handler import build_frame_command
+from fractions import Fraction
+
 from .core.ffmpeg_handler import build_video_filter_chain
+from .core.timing import plan_timing
+
+# 24 frames at 24 fps kept at 1 s: no retime, so the chain is just the
+# timing prefix plus the scale under test.
+NO_RETIME = plan_timing(24, Fraction(24), Fraction(24), Fraction(1))
 
 
 # --- even() -----------------------------------------------------------------
@@ -159,16 +166,16 @@ def test_probe_resolution_returns_none_for_missing_file() -> None:
 
 def test_filter_chain_without_reformat_keeps_colour_matrix_only() -> None:
     """With reformat off the scale filter stays a pure colour-matrix tag."""
-    chain = build_video_filter_chain(1.0, "24", None)
+    chain = build_video_filter_chain(NO_RETIME, None)
     assert chain == (
-        "setpts=1.0000000000*PTS,fps=24,"
+        "settb=AVTB,setpts=PTS*1/1,fps=24,"
         "scale=in_color_matrix=bt709:out_color_matrix=bt709"
     ), chain
 
 
 def test_filter_chain_with_reformat_adds_size_and_lanczos() -> None:
     """Reformat extends the existing scale rather than adding a second one."""
-    chain = build_video_filter_chain(1.0, "24", (1920, 804))
+    chain = build_video_filter_chain(NO_RETIME, (1920, 804))
     assert chain.count("scale=") == 1, chain
     assert "w=1920:h=804" in chain, chain
     assert "flags=lanczos+accurate_rnd+full_chroma_int" in chain, chain
@@ -177,7 +184,7 @@ def test_filter_chain_with_reformat_adds_size_and_lanczos() -> None:
 
 def test_filter_chain_passes_negative_two_through() -> None:
     """-2 is ffmpeg's own keep-aspect-and-round-to-even sentinel."""
-    chain = build_video_filter_chain(1.0, "24", (1920, -2))
+    chain = build_video_filter_chain(NO_RETIME, (1920, -2))
     assert "w=1920:h=-2" in chain, chain
 
 

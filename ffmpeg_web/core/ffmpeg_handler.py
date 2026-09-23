@@ -5,16 +5,17 @@ import re
 import asyncio
 from typing import Dict, List, Optional, Callable, Tuple
 from pydantic import BaseModel
-from . import reformat
-from .utils import normalize_fps, calculate_duration_and_frames
+from . import reformat, timing
 
 
 def build_video_filter_chain(
-    scale_factor: float,
-    out_ffmpeg_fps_str: str,
+    plan: timing.TimingPlan,
     size: Optional[Tuple[int, int]],
 ) -> str:
     """Build the ``-vf`` chain: retime, resample to CFR, then scale.
+
+    The retime and CFR part comes from ``timing.timing_filters`` so the
+    maths stays exact (see core/timing.py).
 
     When ``size`` is None the trailing ``scale`` filter carries only the
     colour matrix, exactly as it always has -- it tags BT.709 without
@@ -26,8 +27,6 @@ def build_video_filter_chain(
     ratio and round to a multiple of two" sentinel, and passes through
     untouched.
     """
-    setpts_filter = f"setpts={scale_factor:.10f}*PTS"
-
     scale_options = []
     if size is not None:
         width, height = size
@@ -35,7 +34,7 @@ def build_video_filter_chain(
     scale_options += ["in_color_matrix=bt709", "out_color_matrix=bt709"]
 
     scale_filter = "scale=" + ":".join(scale_options)
-    return f"{setpts_filter},fps={out_ffmpeg_fps_str},{scale_filter}"
+    return f"{timing.timing_filters(plan)},{scale_filter}"
 
 
 # Codecs that encode toward a target bitrate, as opposed to ProRes' qscale
@@ -345,26 +344,20 @@ class FFmpegHandler:
 
         output_path = os.path.join(config.output_folder, config.output_filename)
         
-        # Basic FPS normalization
-        src_num_fps, src_ffmpeg_fps_str, src_num, src_den = normalize_fps(config.source_frame_rate)
-        out_num_fps, out_ffmpeg_fps_str, out_num, out_den = normalize_fps(config.frame_rate)
-        
+        # Frame rates and duration, in exact arithmetic (see core/timing.py).
         try:
-            desired_duration = float(config.desired_duration)
-            if src_num_fps <= 0 or desired_duration <= 0:
-                raise ValueError
-        except ValueError:
-             self.log_callback('error', "Invalid duration or frame rate.")
-             return
-
-        # Calculate frames
-        total_input_frames = config.end_frame - config.start_frame + 1
-        original_duration = total_input_frames / src_num_fps
-        scale_factor = desired_duration / original_duration
-        actual_duration = desired_duration
-        
-        # Calculate expected output frames
-        total_frames_needed = int(round(out_num_fps * actual_duration))
+            source_fps = timing.parse_fps(config.source_frame_rate)
+            output_fps = timing.parse_fps(config.frame_rate)
+            plan = timing.plan_timing(
+                config.end_frame - config.start_frame + 1,
+                source_fps, output_fps,
+                timing.parse_duration(config.desired_duration),
+            )
+        except ValueError as exc:
+            self.log_callback('error', f"Invalid duration or frame rate: {exc}")
+            return
+        self.log_callback('output', timing.describe(plan) + "\n")
+        total_frames_needed = plan.output_frames
 
         # --- Build Command ---
         cmd = ["ffmpeg", "-y", "-accurate_seek"]
@@ -373,7 +366,7 @@ class FFmpegHandler:
         input_path = os.path.join(config.input_folder, config.filename_pattern)
         image_sequence_input_args = [
             "-start_number", str(config.start_frame),
-            "-framerate", src_ffmpeg_fps_str,
+            "-framerate", timing.fps_arg(source_fps),
             "-i", input_path
         ]
         
@@ -404,9 +397,7 @@ class FFmpegHandler:
             self.log_callback('error', str(exc))
             return
 
-        ffmpeg_filters_str = build_video_filter_chain(
-            scale_factor, out_ffmpeg_fps_str, reformat_size
-        )
+        ffmpeg_filters_str = build_video_filter_chain(plan, reformat_size)
         cmd += ["-vf", ffmpeg_filters_str]
 
         # Codec & Pixel Format
@@ -438,15 +429,9 @@ class FFmpegHandler:
              output_pix_fmt = "rgb24"
              video_codec_params = ["-c:v", "qtrle"]
         
-        # Timescale
-        if out_num is not None:
-            track_timescale = str(out_num)
-        else:
-             track_timescale = str(int(round(out_num_fps * 1000)))
-
         cmd += [
             "-pix_fmt", output_pix_fmt,
-            "-video_track_timescale", track_timescale
+            "-video_track_timescale", str(timing.track_timescale(output_fps))
         ]
         
         cmd += output_audio_handling_args

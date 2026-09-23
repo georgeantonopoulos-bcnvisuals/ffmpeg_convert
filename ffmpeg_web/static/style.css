@@ -760,6 +760,23 @@ input:checked + .slider:before {
     color: var(--status-error);
 }
 
+/* Live "what the file will measure" readout under Desired Duration. */
+.timing-hint {
+    margin: 6px 0 0;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.timing-hint strong {
+    color: var(--status-ready);
+    font-weight: 600;
+}
+
+.timing-hint.is-warning,
+.timing-hint.is-warning strong {
+    color: var(--status-warning);
+}
+
 /* Action Buttons & Progress */
 .action-buttons {
     display: flex;

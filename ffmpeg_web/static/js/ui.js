@@ -34,6 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         codecInfo: document.getElementById('codec_info'),
         versionBanner: document.getElementById('version_banner'),
         desiredDuration: document.getElementById('desired_duration'),
+        timingHint: document.getElementById('timing-hint'),
         audioOption: document.getElementById('audio_option'),
 
         reformatEnabled: document.getElementById('reformat_enabled'),
@@ -240,8 +241,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (dom.inputFolder.value === "") dom.inputFolder.value = settings.last_input_folder || "";
             if (dom.outputFolder.value === "") dom.outputFolder.value = settings.last_output_folder || "";
 
-            dom.sourceFps.value = settings.source_frame_rate || "24";
-            dom.outputFps.value = settings.frame_rate || "24";
+            dom.sourceFps.value = matchRateOption(dom.sourceFps, settings.source_frame_rate, "24");
+            dom.outputFps.value = matchRateOption(dom.outputFps, settings.frame_rate, "24");
             dom.desiredDuration.value = settings.desired_duration || "15";
             dom.mp4Bitrate.value = settings.mp4_bitrate || "30";
             dom.h264Level.value = settings.level || "6.1";
@@ -260,6 +261,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             state.filenameCustom = Boolean(settings.output_filename_custom);
             updateReformatUI();
+            updateTimingHint();
 
             if (settings.codec) {
                 dom.codec.value = settings.codec;
@@ -326,6 +328,67 @@ document.addEventListener('DOMContentLoaded', async () => {
             return { width: evenUp(reqW), height: evenUp(reqW * srcH / srcW) };
         }
         return { width: evenUp(reqH * srcW / srcH), height: evenUp(reqH) };
+    }
+
+    // --- Frame rate & duration ---
+    // Rates are exact rationals ("24000/1001"), mirroring core/timing.py, so
+    // NTSC maths never goes through a float like 23.976.
+    function parseRate(value) {
+        const [num, den] = String(value).split('/').map(Number);
+        return { num, den: den || 1 };
+    }
+
+    // Saved settings from before the dropdown hold typed decimals
+    // ("23.976", "29.97"); pick the option within 0.05% of it.
+    function matchRateOption(select, saved, fallback) {
+        const wanted = parseFloat(saved);
+        for (const option of select.options) {
+            const { num, den } = parseRate(option.value);
+            if (Math.abs(num / den - wanted) <= (num / den) / 2000) return option.value;
+        }
+        return fallback;
+    }
+
+    function rateLabel(select) {
+        return select.options[select.selectedIndex].text.replace(/\s*\(.*\)$/, '');
+    }
+
+    // Show what the file will measure: the content is always retimed to
+    // exactly the requested seconds, but a file holds whole frames, so at an
+    // NTSC rate the partial last frame is dropped (same rule as the backend).
+    function updateTimingHint() {
+        const hint = dom.timingHint;
+        const text = dom.desiredDuration.value.trim();
+        hint.classList.remove('is-warning');
+        if (!/^\d*\.?\d+$/.test(text) || parseFloat(text) <= 0) {
+            hint.textContent = "";
+            return;
+        }
+        // Integer maths: duration = durInt / scale seconds exactly.
+        const decimals = (text.split('.')[1] || "").length;
+        const scale = 10 ** decimals;
+        const durInt = Math.round(parseFloat(text) * scale);
+        const { num, den } = parseRate(dom.outputFps.value);
+        const frames = Math.max(1, Math.floor((durInt * num) / (den * scale)));
+        const exact = (durInt * num) % (den * scale) === 0;
+        const secs = (frames * den / num).toFixed(3);
+        const label = rateLabel(dom.outputFps);
+        const asked = (durInt / scale).toFixed(3);
+
+        if (exact) {
+            hint.innerHTML = `Output: <strong>${frames} frames = ${secs} s</strong> exactly at ${label} fps`;
+            return;
+        }
+        const ideal = ((durInt * num) / (den * scale)).toFixed(2);
+        // NTSC can never be exact in whole seconds; a whole rate just needs
+        // a duration that lands on a frame boundary.
+        const advice = den !== 1
+            ? `Use 25 or 30 fps if the player needs exactly ${asked} s.`
+            : `For an exact length, use a duration in whole frames (a multiple of 1/${num} s).`;
+        hint.classList.add('is-warning');
+        hint.innerHTML =
+            `Retimed to exactly ${asked} s, but that is ${ideal} frames at ${label} fps: ` +
+            `the file will be <strong>${frames} frames = ${secs} s</strong>. ${advice}`;
     }
 
     function updateReformatUI() {
@@ -595,9 +658,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         }
 
-        const fps = parseFloat(dom.sourceFps.value) || 24;
-        const nativeSecs = totalFrames > 0 ? (totalFrames / fps).toFixed(2) : "0.00";
-        if (dom.detectedDuration) dom.detectedDuration.textContent = `${nativeSecs}s (@ ${fps}fps)`;
+        const { num, den } = parseRate(dom.sourceFps.value);
+        const nativeSecs = totalFrames > 0 ? (totalFrames * den / num).toFixed(3) : "0.000";
+        if (dom.detectedDuration) {
+            dom.detectedDuration.textContent = `${nativeSecs}s (@ ${rateLabel(dom.sourceFps)}fps)`;
+        }
 
         if (dom.sequenceFormatBadge) {
             const isExr = (seq.pattern || "").toLowerCase().endsWith('.exr');
@@ -889,7 +954,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         field.addEventListener('change', saveCurrentSettings);
     });
 
-    dom.sourceFps.addEventListener('input', () => {
+    dom.outputFps.addEventListener('change', updateTimingHint);
+    dom.desiredDuration.addEventListener('input', updateTimingHint);
+
+    dom.sourceFps.addEventListener('change', () => {
         updateSequenceSummaryCard({
             start: state.frameRange.start,
             end: state.frameRange.end,
