@@ -1,11 +1,14 @@
 """Tests for frame-rate parsing and duration/retime planning.
 
-The requirement these guard: the retime is always to *exactly* the
-requested seconds.  At a whole-number output rate the file is exact too
-(10 s at 30 fps is 300 frames and reads 10.000000 s).  At an NTSC rate
-the content still spans exactly 10 s, and the partial frame that does not
-fit is dropped (299 frames = 9.977 s at 29.97) -- but never a whole frame
-from the start, which the old maths lost.
+The requirement these guard: a file reads *exactly* the requested
+seconds.  At a whole-number output rate that is plain whole frames (10 s
+at 30 fps is 300 frames and reads 10.000000 s).  At an NTSC rate a whole
+number of seconds is never whole frames (15 s at 29.97 = 449.55), so the
+duration is filled with whole frames (450) and only the LAST frame is
+shortened (551/30000 s) so the file reads 15.000000 s; the file also
+carries a SMPTE timecode track (drop-frame at 29.97/59.94), so 450 frames
+is exactly 00:00:15;00.  Never a whole frame lost from the start, which
+the old maths did.
 
 Framework-free like ``test_reformat.py``.  The end-to-end tests at the
 bottom encode real files through ``FFmpegHandler.run_ffmpeg`` and are
@@ -33,6 +36,8 @@ from .core.timing import (
     parse_fps,
     plan_timing,
     timing_filters,
+    frames_to_timecode,
+    trim_last_frame_bsf,
     track_timescale,
 )
 
@@ -103,26 +108,63 @@ def test_whole_rates_hit_the_requested_duration_exactly():
             assert plan.output_frames == parse_duration(seconds) * rate, (rate, seconds)
 
 
-def test_ntsc_drops_the_partial_last_frame_and_says_so():
-    # 10 s at 29.97 is 299.7 frames: keep 299, drop the 0.7.
-    plan = plan_timing(300, NTSC_29, NTSC_29, Fraction(10))
-    assert plan.output_frames == 299
-    assert plan.output_duration == Fraction(299 * 1001, 30000)  # 9.977 s
-    assert not plan.exact
+def test_ntsc_is_exact_by_shortening_only_the_last_frame():
+    # The Liveboard case: 450 frames rendered for 15 s, delivered at 29.97.
+    # 15 s is 449.55 frames: 450 frames, the last one 551 ticks, not 1001.
+    plan = plan_timing(450, Fraction(30), NTSC_29, Fraction(15))
+    assert plan.output_frames == 450
+    assert plan.last_frame_ticks == 450000 - 449 * 1001 == 551
+    assert plan.output_duration == 15
+    assert plan.exact
+    assert plan.timecode == "00:00:00;00"  # drop-frame
 
     plan = plan_timing(240, NTSC_23, NTSC_23, Fraction(10))
-    assert plan.output_frames == 239  # 239.76 frames
+    assert plan.output_frames == 240  # 239.76 -> 240
+    assert plan.last_frame_ticks == 240000 - 239 * 1001 == 761
+    assert plan.output_duration == 10 and plan.exact
+    assert plan.timecode == "00:00:00:00"  # 23.976 has no drop-frame
+
+    plan = plan_timing(900, NTSC_59, NTSC_59, Fraction(15))
+    assert plan.output_frames == 900 and plan.output_duration == 15
+    assert plan.timecode == "00:00:00;00"
 
 
-def test_ntsc_exact_when_duration_is_whole_frames():
+def test_ntsc_on_a_frame_boundary_needs_no_trim_but_keeps_timecode():
     plan = plan_timing(240, NTSC_23, NTSC_23, Fraction(1001, 100))
     assert plan.output_frames == 240
     assert plan.exact
+    assert plan.last_frame_ticks is None
+    assert plan.timecode == "00:00:00:00"
+
+
+def test_whole_rates_get_no_trim_and_no_timecode():
+    for rate in (24, 25, 30, 50, 60):
+        plan = plan_timing(240, Fraction(24), Fraction(rate), Fraction(10))
+        assert plan.last_frame_ticks is None and plan.timecode is None, rate
+    # An off-frame duration at a whole rate still drops the partial frame.
+    plan = plan_timing(240, Fraction(24), Fraction(25), Fraction(21, 2))
+    assert plan.output_frames == 262 and not plan.exact and plan.last_frame_ticks is None
+
+
+def test_frames_to_timecode():
+    assert frames_to_timecode(450, NTSC_29) == "00:00:15;00"
+    assert frames_to_timecode(1800, NTSC_29) == "00:01:00;02"  # drop-frame skip
+    assert frames_to_timecode(17982, NTSC_29) == "00:10:00;00"
+    assert frames_to_timecode(900, NTSC_59) == "00:00:15;00"
+    assert frames_to_timecode(240, NTSC_23) == "00:00:10:00"
+
+
+def test_trim_bsf_targets_the_last_frame_only():
+    plan = plan_timing(450, Fraction(30), NTSC_29, Fraction(15))
+    assert trim_last_frame_bsf(plan) == "setts=duration='if(eq(N,449),551,DURATION)'"
 
 
 def test_retime_is_exactly_the_requested_seconds():
-    # 240 frames at 23.976 last 10.01 s; asking for 10 s squeezes by 1000/1001.
-    assert plan_timing(240, NTSC_23, NTSC_23, Fraction(10)).setpts_ratio == Fraction(1000, 1001)
+    # NTSC fills the duration with whole frames, so 240 frames at 23.976
+    # asked for 10 s is a straight 1:1 copy (the last frame is trimmed).
+    assert plan_timing(240, NTSC_23, NTSC_23, Fraction(10)).setpts_ratio == 1
+    # 450 frames rendered at 30 for 15 s, out at 29.97: one frame per slot.
+    assert plan_timing(450, Fraction(30), NTSC_29, Fraction(15)).setpts_ratio == Fraction(1001, 1000)
     # Native length at the same rate: no retime at all.
     assert plan_timing(240, Fraction(24), Fraction(24), Fraction(10)).setpts_ratio == 1
     assert plan_timing(240, NTSC_23, NTSC_23, Fraction(1001, 100)).setpts_ratio == 1
@@ -142,10 +184,11 @@ def test_describe_gives_advice_that_fits_the_cause():
     exact = describe(plan_timing(240, Fraction(24), Fraction(30), Fraction(10)))
     assert "300 frames" in exact and "10.000 s" in exact and "exact" in exact
 
-    # NTSC: no duration in whole seconds can be exact, so suggest a whole rate.
-    ntsc = describe(plan_timing(240, Fraction(24), NTSC_29, Fraction(10)))
-    assert "299 frames" in ntsc and "9.977 s" in ntsc
-    assert "25 or 30 fps" in ntsc and "exactly 10.000 s" in ntsc
+    # NTSC: exact by trimming the last frame, and says so.
+    ntsc = describe(plan_timing(450, Fraction(30), NTSC_29, Fraction(15)))
+    assert "450 frames" in ntsc and "15.000 s" in ntsc and "exact" in ntsc
+    assert "00:00:15;00" in ntsc and "last frame" in ntsc
+    assert "25 or 30 fps" not in ntsc
 
     # Whole rate, off-frame duration: already on 25 fps, so the advice is
     # about the duration, not the rate.
@@ -196,15 +239,16 @@ def test_both_dropdowns_offer_exactly_the_backend_rates():
 # --- End to end: real encodes through run_ffmpeg ----------------------------------
 
 HAVE_FFMPEG = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
-GREY_STEP = 5  # 48 frames -> grey 0..235
+GREY_STEP = 5  # grey level = (N mod GREY_CYCLE) * 5, so 0..235
+GREY_CYCLE = 48
 
 
 def _make_sequence(folder: str, frames: int) -> None:
-    """Frame N is solid grey level N * GREY_STEP, so any output frame can be
-    traced back to its source frame whatever the codec does to the pixels."""
+    """Frame N is solid grey (N mod GREY_CYCLE) * GREY_STEP, so any output
+    frame can be traced back to its source frame whatever the codec does."""
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
-         "-i", f"nullsrc=s=64x36:r=24,format=gray,geq=lum='N*{GREY_STEP}'",
+         "-i", f"nullsrc=s=64x36:r=24,format=gray,geq=lum='mod(N,{GREY_CYCLE})*{GREY_STEP}'",
          "-frames:v", str(frames), "-start_number", "1001",
          os.path.join(folder, "src.%04d.png")],
         check=True,
@@ -227,6 +271,19 @@ def _encode(src: str, out_dir: str, name: str, source_fps: str, output_fps: str,
     return os.path.join(out_dir, name)
 
 
+def _timecode(path: str) -> str:
+    """The SMPTE start timecode tag, or '' when the file has none."""
+    tags = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream_tags=timecode",
+         "-of", "csv=p=0", path], capture_output=True, text=True, check=True).stdout.split()
+    return tags[0] if tags else ""
+
+
+def _mediainfo(path: str, section: str, fields: str) -> str:
+    return subprocess.run(["mediainfo", f"--Inform={section};{fields}", path],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 def _probe(path: str) -> tuple[str, int]:
     """Container duration as ffprobe prints it, and the decoded frame count."""
     duration = subprocess.run(
@@ -247,7 +304,7 @@ def _source_frames(path: str) -> list:
     return [round(level / GREY_STEP) for level in out]
 
 
-def test_e2e_every_output_rate_gives_the_planned_duration():
+def test_e2e_every_output_rate_reads_exactly_the_requested_seconds():
     if not HAVE_FFMPEG:
         print("  (skipped: ffmpeg not on PATH)")
         return
@@ -258,14 +315,14 @@ def test_e2e_every_output_rate_gives_the_planned_duration():
         for value, label in FRAME_RATES:
             path = _encode(src, tmp, f"out_{label}.mp4", "24", value, "2", 48)
             duration, frames = _probe(path)
-            plan = plan_timing(48, Fraction(24), parse_fps(value), Fraction(2))
+            rate = parse_fps(value)
+            plan = plan_timing(48, Fraction(24), rate, Fraction(2))
             assert frames == plan.output_frames, (label, frames, plan.output_frames)
-            if plan.exact:
-                assert duration == "2.000000", (label, duration)
+            assert duration == "2.000000", (label, duration)
+            if rate.denominator == 1:
+                assert _timecode(path) == "", (label, _timecode(path))
             else:
-                # The MP4 movie header counts whole milliseconds, so an NTSC
-                # length like 1.960292 s is reported rounded up to 1.961.
-                assert abs(float(duration) - float(plan.output_duration)) <= 0.001, (label, duration)
+                assert _timecode(path) == plan.timecode, (label, _timecode(path))
 
 
 def test_e2e_blank_audio_does_not_lengthen_an_exact_file():
@@ -276,8 +333,8 @@ def test_e2e_blank_audio_does_not_lengthen_an_exact_file():
         src = os.path.join(tmp, "src")
         os.makedirs(src)
         _make_sequence(src, 48)
-        for value in ("25", "30"):
-            path = _encode(src, tmp, f"audio_{value}.mp4", "24", value, "2", 48,
+        for value in ("25", "30", "30000/1001", "24000/1001"):
+            path = _encode(src, tmp, f"audio_{value.replace('/', '_')}.mp4", "24", value, "2", 48,
                            audio="Blank Audio Track")
             duration, _ = _probe(path)
             assert duration == "2.000000", (value, duration)
@@ -298,10 +355,9 @@ def test_e2e_native_length_keeps_every_source_frame_in_order():
             assert _source_frames(path) == list(range(48)), (value, _source_frames(path))
 
 
-def test_e2e_ntsc_round_seconds_keeps_the_first_frame():
-    # 48 frames at 23.976 (2.002 s) retimed to exactly 2 s is 47.95 frames:
-    # keep 47, drop the partial one at the END.  The old maths dropped
-    # frame 0 instead.
+def test_e2e_ntsc_round_seconds_keeps_every_frame():
+    # 48 frames at 23.976 asked for exactly 2 s: all 48 frames, in order,
+    # the last one shortened.  The old maths dropped frame 0 here.
     if not HAVE_FFMPEG:
         print("  (skipped: ffmpeg not on PATH)")
         return
@@ -311,7 +367,47 @@ def test_e2e_ntsc_round_seconds_keeps_the_first_frame():
         _make_sequence(src, 48)
         path = _encode(src, tmp, "ntsc.mov", "24000/1001", "24000/1001", "2", 48,
                        codec="qtrle")
-        assert _source_frames(path) == list(range(47)), _source_frames(path)
+        assert _source_frames(path) == list(range(48)), _source_frames(path)
+        assert _probe(path) == ("2.000000", 48)
+
+
+def test_e2e_liveboard_15s_at_2997_from_a_30fps_render():
+    # The delivery that motivated this: 450 frames rendered for 15 s at 30,
+    # spec'd as 15 s at 29.97.  Must read 15.000 s everywhere, keep all 450
+    # frames once each in order, and carry SMPTE timecode 00:00:00;00.
+    if not HAVE_FFMPEG:
+        print("  (skipped: ffmpeg not on PATH)")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "src")
+        os.makedirs(src)
+        _make_sequence(src, 450)
+        for codec, name in (("h264", "live.mp4"), ("h265", "live_hevc.mp4"),
+                            ("prores", "live_prores.mov")):
+            path = _encode(src, tmp, name, "30", "30000/1001", "15", 450, codec=codec)
+            assert _probe(path) == ("15.000000", 450), (codec, _probe(path))
+            expected = [n % GREY_CYCLE for n in range(450)]
+            assert _source_frames(path) == expected, codec
+            assert _timecode(path) == "00:00:00;00", (codec, _timecode(path))
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                 "stream=r_frame_rate,color_transfer,color_primaries", "-of", "default=nw=1",
+                 path], capture_output=True, text=True, check=True).stdout
+            tags = dict(line.split("=", 1) for line in out.split())
+            assert tags["r_frame_rate"] == "30000/1001", (codec, tags)
+            # The trim is a stream-copy remux; it must not lose colour tags.
+            # (ProRes from this app carries none even untrimmed -- a
+            # separate, older gap -- so there is nothing to preserve.)
+            if codec != "prores":
+                assert tags["color_transfer"] == "bt709", (codec, tags)
+                assert tags["color_primaries"] == "bt709", (codec, tags)
+            if shutil.which("mediainfo"):
+                general = _mediainfo(path, "General", "%Duration/String3%")
+                video = _mediainfo(path, "Video", "%FrameRate_Mode% %FrameRate% %FrameCount%")
+                assert general == "00:00:15.000", (codec, general)
+                assert video == "CFR 29.970 450", (codec, video)
+        leftovers = [f for f in os.listdir(tmp) if "untrimmed" in f]
+        assert not leftovers, leftovers
 
 
 def test_e2e_prores_mov_is_exact_at_whole_rates():

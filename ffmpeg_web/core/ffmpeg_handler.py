@@ -434,6 +434,13 @@ class FFmpegHandler:
             "-video_track_timescale", str(timing.track_timescale(output_fps))
         ]
         
+        # NTSC exact length: the last frame is shortened in a stream-copy
+        # remux after the encode (see timing.trim_last_frame_bsf), which
+        # needs display order == decode order, i.e. no B-frames.
+        trim = plan.last_frame_ticks is not None
+        if trim and config.codec in BITRATE_CODECS:
+            video_codec_params += ["-bf", "0"]
+
         cmd += output_audio_handling_args
         cmd += video_codec_params
         
@@ -445,15 +452,46 @@ class FFmpegHandler:
 
         if total_frames_needed:
             cmd += ["-frames:v", str(total_frames_needed)]
-            
-        cmd.append(output_path)
+
+        if trim:
+            root, ext = os.path.splitext(output_path)
+            encode_path = f"{root}.untrimmed{ext}"
+        else:
+            encode_path = output_path
+            if plan.timecode:
+                cmd += ["-timecode", plan.timecode]
+        cmd.append(encode_path)
 
         self.log_callback('output', f"FFmpeg Command: {' '.join(cmd)}\n")
-        
-        # Execute
-        self._execute_process(cmd, total_frames_needed)
 
-    def _execute_process(self, cmd, total_frames_needed):
+        # Execute
+        if not trim:
+            self._execute_process(cmd, total_frames_needed)
+            return
+        try:
+            if not self._execute_process(cmd, total_frames_needed, announce_success=False):
+                return
+            remux = [
+                "ffmpeg", "-y", "-i", encode_path, "-map", "0", "-c", "copy",
+                "-video_track_timescale", str(timing.track_timescale(output_fps)),
+                "-timecode", plan.timecode,
+                "-bsf:v", timing.trim_last_frame_bsf(plan),
+                output_path,
+            ]
+            self.log_callback('output', "Shortening the last frame to land on the exact duration.\n")
+            self.log_callback('output', f"FFmpeg Command: {' '.join(remux)}\n")
+            self._execute_process(remux, total_frames_needed)
+        finally:
+            if os.path.exists(encode_path):
+                os.remove(encode_path)
+
+    def _execute_process(self, cmd, total_frames_needed, announce_success=True) -> bool:
+        """Run one FFmpeg command, streaming its log; True if it succeeded.
+
+        ``announce_success=False`` is for a first pass that another command
+        follows, so the UI does not report the job done too early.
+        """
+        ok = False
         try:
             self.process = subprocess.Popen(
                 cmd,
@@ -490,7 +528,9 @@ class FFmpegHandler:
             if self.is_cancelled:
                 self.log_callback('cancelled', "Conversion cancelled.")
             elif self.process.returncode == 0:
-                self.log_callback('success', "Conversion complete!")
+                ok = True
+                if announce_success:
+                    self.log_callback('success', "Conversion complete!")
             else:
                  # Read remaining stderr if any
                 remaining = self.process.stderr.read()
@@ -500,6 +540,7 @@ class FFmpegHandler:
             self.log_callback('error', f"Execution error: {e}")
         finally:
             self.process = None
+        return ok
 
     def cancel(self):
         self.is_cancelled = True

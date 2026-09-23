@@ -4,17 +4,19 @@ Everything here uses ``Fraction`` so NTSC rates stay exact (23.976 is
 24000/1001, not a float) and a requested duration is never nudged by
 float rounding.
 
-The retime is always to exactly the requested seconds: the sequence's
-content is stretched or squeezed to span precisely that long.
+A file must read exactly the requested seconds.
 
-The one thing exact arithmetic cannot change: a file holds whole frames,
-so its duration is always ``frames / fps``.  At a whole-number rate any
-duration on a frame boundary is hit exactly (10 s at 30 fps = 300
-frames = 10.000 s).  At an NTSC rate a whole number of seconds is never a
-whole number of frames (10 s at 29.97 = 299.7 frames), so the partial
-last frame is dropped (299 frames = 9.977 s) and the plan reports
-``exact=False``.  Out-of-home players that demand an exact duration need
-a whole rate.
+At a whole-number rate that is plain whole frames: 10 s at 30 fps is 300
+frames = 10.000 s.  (An off-frame duration there, e.g. 10.5 s at 25 fps,
+drops the partial last frame and reports ``exact=False``.)
+
+At an NTSC rate a whole number of seconds is never whole frames (15 s at
+29.97 = 449.55), and delivery specs still demand exactly 15 s.  So the
+duration is filled with whole frames (450) and only the LAST frame is
+shortened -- 551/30000 s instead of 1001/30000 -- so the file reads
+15.000000 s while staying constant-frame-rate for every other frame.  NTSC
+files also carry a SMPTE timecode track (drop-frame at 29.97 and 59.94),
+in which 450 frames is exactly 00:00:15;00.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from fractions import Fraction
+from typing import Optional
 
 # The rates the UI offers, as (value sent by the UI, label).  The values
 # are what FFmpeg receives, so NTSC stays an exact rational end to end.
@@ -95,6 +98,38 @@ def track_timescale(rate: Fraction) -> int:
     return rate.numerator if rate.denominator != 1 else rate.numerator * 1000
 
 
+def is_ntsc(rate: Fraction) -> bool:
+    return rate.denominator == 1001
+
+
+def _drop_frame(rate: Fraction) -> bool:
+    # SMPTE drop-frame exists for 29.97 and 59.94; 23.976 has none.
+    return is_ntsc(rate) and round(rate) in (30, 60)
+
+
+def frames_to_timecode(frames: int, rate: Fraction) -> str:
+    """SMPTE timecode for a frame count ('00:00:15;00' for 450 at 29.97).
+
+    Drop-frame skips frame numbers 0-1 (0-3 at 59.94) at the start of each
+    minute except every tenth, keeping timecode in step with the clock.
+    """
+    nominal = round(rate)
+    drop = _drop_frame(rate)
+    if drop:
+        skip = 2 if nominal == 30 else 4
+        per_ten = nominal * 600 - skip * 9
+        per_minute = nominal * 60 - skip
+        tens, rem = divmod(frames, per_ten)
+        frames += skip * 9 * tens
+        if rem > skip:
+            frames += skip * ((rem - skip) // per_minute)
+    ff = frames % nominal
+    ss = frames // nominal % 60
+    mm = frames // (nominal * 60) % 60
+    hh = frames // (nominal * 3600)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}{';' if drop else ':'}{ff:02d}"
+
+
 @dataclass(frozen=True)
 class TimingPlan:
     output_fps: Fraction
@@ -104,32 +139,66 @@ class TimingPlan:
     output_duration: Fraction
     # True when output_duration is exactly the requested duration.
     exact: bool
-    # Multiplier on source timestamps so the sequence spans exactly the
-    # requested duration.
+    # Multiplier on source timestamps: the sequence spans the output frames.
     setpts_ratio: Fraction
+    # NTSC only: the shortened length of the final frame, in track ticks,
+    # or None when the duration already lands on a frame boundary.
+    last_frame_ticks: Optional[int] = None
+    # NTSC only: SMPTE start timecode for the file's timecode track.
+    timecode: Optional[str] = None
 
 
 def plan_timing(source_frames: int, source_fps: Fraction, output_fps: Fraction,
                 duration: Fraction) -> TimingPlan:
     """Work out frame count, real duration and retime for a conversion.
 
-    The content is retimed to span exactly ``duration``; the file keeps
-    the whole output frames that fit in it, dropping any partial frame at
-    the end.
+    Whole rates keep the whole frames that fit in ``duration``.  NTSC rates
+    fill ``duration`` with whole frames and shorten the last one so the
+    file is exactly ``duration`` long (see the module docstring).  Either
+    way the source is spread across the output frames' time slots.
     """
     if source_frames < 1:
         raise ValueError("The sequence has no frames")
-    output_frames = max(1, math.floor(duration * output_fps))
-    output_duration = Fraction(output_frames) / output_fps
     native_duration = Fraction(source_frames) / source_fps
+    last_frame_ticks = None
+    timecode = None
+
+    if is_ntsc(output_fps):
+        output_frames = max(1, math.ceil(duration * output_fps))
+        timescale = track_timescale(output_fps)
+        ticks_per_frame = Fraction(timescale) / output_fps  # 1001
+        full_ticks = output_frames * ticks_per_frame
+        wanted_ticks = round(duration * timescale)
+        if wanted_ticks < full_ticks:
+            last_frame_ticks = int(wanted_ticks - (output_frames - 1) * ticks_per_frame)
+        output_duration = Fraction(min(wanted_ticks, full_ticks), timescale)
+        timecode = frames_to_timecode(0, output_fps)
+    else:
+        output_frames = max(1, math.floor(duration * output_fps))
+        output_duration = Fraction(output_frames) / output_fps
+
     return TimingPlan(
         output_fps=output_fps,
         requested_duration=duration,
         output_frames=output_frames,
         output_duration=output_duration,
         exact=output_duration == duration,
-        setpts_ratio=duration / native_duration,
+        setpts_ratio=(Fraction(output_frames) / output_fps) / native_duration,
+        last_frame_ticks=last_frame_ticks,
+        timecode=timecode,
     )
+
+
+def trim_last_frame_bsf(plan: TimingPlan) -> str:
+    """Bitstream filter that shortens the final frame to ``last_frame_ticks``.
+
+    Applied in a stream-copy remux (the MP4/MOV track timebase is then
+    1/timescale, so the value is in ticks).  ``N`` counts packets in
+    decode order, which only equals display order without B-frames -- the
+    encode for a trimmed file therefore runs with ``-bf 0``.
+    """
+    return (f"setts=duration='if(eq(N,{plan.output_frames - 1}),"
+            f"{plan.last_frame_ticks},DURATION)'")
 
 
 def timing_filters(plan: TimingPlan) -> str:
@@ -152,13 +221,16 @@ def describe(plan: TimingPlan) -> str:
     summary = (f"{plan.output_frames} frames @ {label} fps = "
                f"{float(plan.output_duration):.3f} s")
     if plan.exact:
-        return f"Timing: {summary} (exact)"
+        line = f"Timing: {summary} (exact)"
+        if plan.timecode:
+            end = frames_to_timecode(plan.output_frames, plan.output_fps)
+            line += f", SMPTE timecode {plan.timecode} -> {end}"
+        if plan.last_frame_ticks:
+            ms = plan.last_frame_ticks * 1000 / track_timescale(plan.output_fps)
+            line += f"; last frame shortened to {ms:.1f} ms to land on exactly {float(plan.requested_duration):.3f} s"
+        return line
     asked = f"{float(plan.requested_duration):.3f} s"
-    if plan.output_fps.denominator != 1:
-        advice = f"Use 25 or 30 fps if the player needs exactly {asked}."
-    else:
-        advice = (f"For an exact length, use a duration in whole frames "
-                  f"(a multiple of 1/{plan.output_fps.numerator} s).")
     return (f"Timing: retimed to exactly {asked}; {summary}. {asked} is not a whole "
             f"number of frames at {label} fps, so the partial last frame is dropped. "
-            f"{advice}")
+            f"For an exact length, use a duration in whole frames "
+            f"(a multiple of 1/{plan.output_fps.numerator} s).")

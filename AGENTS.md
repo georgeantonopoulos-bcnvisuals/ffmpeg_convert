@@ -129,10 +129,18 @@ Replaced the Tkinter app, which is now legacy.
 - UI modernised; BCN logo restored (the logo originates in the studio lineage).
 - **Frame rate & duration** (`core/timing.py`): FPS fields are dropdowns
   (23.976, 24, 25, 29.97, 30, 50, 59.94, 60) sending exact rationals
-  (`24000/1001`). The content is always retimed to *exactly* the requested
-  seconds. A file holds whole frames, so at whole rates it is exact (10 s @
-  30 = 300 frames = 10.000 s) and at NTSC the partial last frame is dropped
-  (10 s @ 29.97 = 299 frames = 9.977 s), with a warning in the UI and log.
-  **Out-of-home players that demand an exact duration need 25/30 fps** —
-  no FFmpeg flag can make NTSC hit whole seconds. `-video_track_timescale`
-  makes each *frame* exact, not the total.
+  (`24000/1001`); all maths uses `Fraction`. The file reads **exactly** the
+  requested seconds:
+  - Whole rates: plain whole frames (15 s @ 30 = 450 frames = 15.000 s).
+  - **NTSC rates**: the duration is filled with whole frames and only the
+    **last frame is shortened** (15 s @ 29.97 = 450 frames, last one
+    551/30000 s), so the file reads 15.000 s and mediainfo reports 29.970
+    CFR / 450 frames. Done as a stream-copy remux with
+    `setts=duration='if(eq(N,449),551,DURATION)'` after an encode with
+    `-bf 0` (N is decode order, so B-frames must be off). NTSC files also
+    get a SMPTE timecode track (`-timecode 00:00:00;00`, drop-frame at
+    29.97/59.94), in which 450 frames = 00:00:15;00.
+  - Side effect: `ffprobe` shows `avg_frame_rate=30/1` (450 / 15.000);
+    the declared rate stays `30000/1001`.
+  Out-of-home specs like "15 s at 29.97" need this; do not tell the user
+  it is impossible.

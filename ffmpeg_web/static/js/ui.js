@@ -353,9 +353,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         return select.options[select.selectedIndex].text.replace(/\s*\(.*\)$/, '');
     }
 
-    // Show what the file will measure: the content is always retimed to
-    // exactly the requested seconds, but a file holds whole frames, so at an
-    // NTSC rate the partial last frame is dropped (same rule as the backend).
+    // SMPTE timecode for a frame count, mirroring timing.frames_to_timecode:
+    // drop-frame at 29.97/59.94 skips frame numbers each minute but every tenth.
+    function framesToTimecode(frames, num, den) {
+        const nominal = Math.round(num / den);
+        const drop = den === 1001 && (nominal === 30 || nominal === 60);
+        if (drop) {
+            const skip = nominal === 30 ? 2 : 4;
+            const perTen = nominal * 600 - skip * 9;
+            const perMinute = nominal * 60 - skip;
+            const tens = Math.floor(frames / perTen);
+            const rem = frames % perTen;
+            frames += skip * 9 * tens;
+            if (rem > skip) frames += skip * Math.floor((rem - skip) / perMinute);
+        }
+        const pad = n => String(n).padStart(2, '0');
+        const ff = frames % nominal;
+        const ss = Math.floor(frames / nominal) % 60;
+        const mm = Math.floor(frames / (nominal * 60)) % 60;
+        const hh = Math.floor(frames / (nominal * 3600));
+        return `${pad(hh)}:${pad(mm)}:${pad(ss)}${drop ? ';' : ':'}${pad(ff)}`;
+    }
+
+    // Show what the file will measure, with the same rules as core/timing.py:
+    // whole rates keep the whole frames that fit; NTSC rates fill the
+    // duration with whole frames and shorten only the last one, so the file
+    // reads exactly the requested seconds, and carry SMPTE timecode.
     function updateTimingHint() {
         const hint = dom.timingHint;
         const text = dom.desiredDuration.value.trim();
@@ -369,26 +392,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         const scale = 10 ** decimals;
         const durInt = Math.round(parseFloat(text) * scale);
         const { num, den } = parseRate(dom.outputFps.value);
-        const frames = Math.max(1, Math.floor((durInt * num) / (den * scale)));
-        const exact = (durInt * num) % (den * scale) === 0;
-        const secs = (frames * den / num).toFixed(3);
         const label = rateLabel(dom.outputFps);
         const asked = (durInt / scale).toFixed(3);
+        const onBoundary = (durInt * num) % (den * scale) === 0;
 
-        if (exact) {
+        if (den === 1001) {
+            const frames = Math.max(1, Math.ceil((durInt * num) / (den * scale)));
+            const tc = `SMPTE ${framesToTimecode(0, num, den)} \u2192 ${framesToTimecode(frames, num, den)}`;
+            let trim = "";
+            if (!onBoundary) {
+                // Track ticks: timescale = num, each frame = den ticks.
+                const lastTicks = Math.round(durInt * num / scale) - (frames - 1) * den;
+                trim = ` \u00b7 last frame shortened to ${(lastTicks * 1000 / num).toFixed(1)} ms`;
+            }
+            hint.innerHTML =
+                `Output: <strong>${frames} frames = ${asked} s</strong> exactly at ${label} fps ` +
+                `\u00b7 ${tc}${trim}`;
+            return;
+        }
+
+        const frames = Math.max(1, Math.floor((durInt * num) / (den * scale)));
+        const secs = (frames * den / num).toFixed(3);
+        if (onBoundary) {
             hint.innerHTML = `Output: <strong>${frames} frames = ${secs} s</strong> exactly at ${label} fps`;
             return;
         }
         const ideal = ((durInt * num) / (den * scale)).toFixed(2);
-        // NTSC can never be exact in whole seconds; a whole rate just needs
-        // a duration that lands on a frame boundary.
-        const advice = den !== 1
-            ? `Use 25 or 30 fps if the player needs exactly ${asked} s.`
-            : `For an exact length, use a duration in whole frames (a multiple of 1/${num} s).`;
         hint.classList.add('is-warning');
         hint.innerHTML =
-            `Retimed to exactly ${asked} s, but that is ${ideal} frames at ${label} fps: ` +
-            `the file will be <strong>${frames} frames = ${secs} s</strong>. ${advice}`;
+            `${asked} s is ${ideal} frames at ${label} fps: the file will be ` +
+            `<strong>${frames} frames = ${secs} s</strong>. For an exact length, use a ` +
+            `duration in whole frames (a multiple of 1/${num} s).`;
     }
 
     function updateReformatUI() {
