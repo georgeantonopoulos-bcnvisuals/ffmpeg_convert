@@ -1,3 +1,4 @@
+# LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.
 print("Debug: ffmpeg_ui.py script started")  # <-- ADD THIS LINE at the VERY TOP of the file
 
 import tkinter as tk

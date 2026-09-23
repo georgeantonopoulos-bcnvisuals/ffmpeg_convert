@@ -1,3 +1,4 @@
+# LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.
 proc set_button_style {} {
     ttk::style configure TButton -padding {5 2} -relief flat
     

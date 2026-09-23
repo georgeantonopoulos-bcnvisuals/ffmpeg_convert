@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.
 
 import subprocess
 import sys

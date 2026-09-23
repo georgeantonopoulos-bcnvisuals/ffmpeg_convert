@@ -1,3 +1,4 @@
+# LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.
 # -*- mode: python ; coding: utf-8 -*-
 
 

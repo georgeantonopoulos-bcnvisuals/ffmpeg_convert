@@ -1,3 +1,4 @@
+# LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.
 package require Tk 8.6
 
 namespace eval ttk::theme::dark {

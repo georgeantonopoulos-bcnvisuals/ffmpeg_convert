@@ -1,4 +1,5 @@
 #!/bin/bash
+# LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.
 # Wrapper script to launch FFmpeg UI reliably
 # Ensures CWD is valid and environment is set up
 

@@ -1,3 +1,5 @@
+> **LEGACY (Tkinter) - DO NOT MODIFY. The only supported app is the ffmpeg Web UI (ffmpeg_web/). See AGENTS.md.**
+
 # FFmpeg UI Rez Package
 
 A Rez package for deploying the FFmpeg UI application.

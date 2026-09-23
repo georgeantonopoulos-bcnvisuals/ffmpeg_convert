@@ -1,208 +1,128 @@
-# FFmpeg GUI - Codebase Synopsis & Deployment Strategy
+# FFmpeg Web UI — Agent Guide
 
-## 1. Codebase Synopsis
+## 🛑 SCOPE RULE — READ FIRST
 
-### Overview
-This application is a Python-based Graphical User Interface (GUI) for **FFmpeg**, specifically tailored for studio production workflows. It handles complex tasks such as **ACES color space conversion**, image sequence processing, and professional codec encoding (ProRes, H.264, H.265).
+**The only product in this directory is the ffmpeg Web UI**: the FastAPI + browser
+app that users start from the **AYON launcher**, which runs
+`/mnt/studio/pipeline/packages/ffmpeg_web_bundle/run.sh` (rez package `ffmpeg_web`
+nested inside that bundle). **This is the only thing agents may work on.**
 
-### Key Components
-- **`ffmpeg_ui.py`**: The primary entry point and GUI logic. It uses `tkinter` for the interface and manages external processes.
-- **`convert_image_sequence.py` / `ffmpeg_converter.py`**: Logic for handling image sequences and constructing FFmpeg command lines.
-- **`dark_theme.tcl` / `rounded_buttons.tcl`**: Custom TCL scripts to provide a premium dark-themed aesthetic to the Tkinter interface.
-- **External Dependencies**:
-  - **FFmpeg**: For video encoding.
-  - **OpenImageIO (`oiiotool`)**: Used for EXR sequence processing and color space transformations.
-  - **`clique`**: A Python library for parsing and assembling file sequences.
-  - **OCIO**: OpenColorIO configuration (currently hardcoded to `/mnt/studio/config/ocio/aces_1.2/config.ocio`).
+Everything else here is **legacy / dead**. Do not modify, fix, build, deploy,
+"modernise", or port features into any of it, even if a request sounds like it
+applies (e.g. "fix the FFmpeg UI"). If a request seems to target legacy code, ask
+the user before touching it — the answer is almost always "do it in the web UI".
 
-### ⚠️ DEPLOYMENT TOPOLOGY — READ BEFORE CHANGING ANYTHING
+| Status | Path | What it is |
+| :--- | :--- | :--- |
+| ✅ **IN SCOPE** | `ffmpeg_web/` | Web UI source (dev lineage). Port finished changes into the studio worktree. |
+| ✅ **IN SCOPE** | `/mnt/studio/pipeline/packages/ffmpeg_web_worktree` | Studio lineage — where changes must land to reach users. |
+| ❌ legacy | `ffmpeg_ui.py`, `dark_theme.tcl`, `rounded_buttons.tcl`, `ffmpeg_ui_icon.png` | Tkinter desktop app. Superseded. |
+| ❌ legacy | `launch_ffmpeg_ui.py`, `run_ffmpeg_ui.sh`, `update_ffmpeg_ui.sh` | Tkinter launchers / deploy-to-`ffmpeg_UI` script. |
+| ❌ legacy | `ffmpeg_ui_rez_package/`, rez pkg `ffmpeg_UI`, `ayon/launch_scripts/launch_ffmpeg_ui.sh` | Tkinter packaging. Frozen Dec 2025. |
+| ❌ legacy | `ffmpeg_ui.spec`, `_archive/` (Nuitka/PyInstaller builds, Qt `ffmpeg_converter.py`) | Abandoned standalone-binary experiments. |
+| ❌ not a target | `ffmpeg_web_bundle/` (here), `make_bundle.sh` | Local, gitignored build artifact. **Never** copy it to the studio share. |
+| ⚪ dev only | `launch_web_ui.py` | Local rez launcher for testing the dev lineage. Not how users launch. |
 
-**This repo is NOT what users launch.** Editing `ffmpeg_convert/` and its local
-`ffmpeg_web_bundle/` changes nothing for users. Verify the deployment target
+Rejected directions — do not propose or resume them: PyInstaller/Nuitka one-file
+binaries, Apptainer images, conda-pack bundles, the Qt converter, or any further
+Tkinter work.
+
+---
+
+## 1. Deployment topology
+
+**Editing this repo changes nothing for users.** Verify the deployment target
 before scoping any work.
 
 | Thing | Path | Notes |
 | :--- | :--- | :--- |
-| **Live web UI (what users run)** | `/mnt/studio/pipeline/packages/ffmpeg_web_bundle` | Separate git repo: `github.com/georgeantonopoulos-bcnvisuals/ffmpeg_web_bundle` |
-| **Edit here to change it** | `/mnt/studio/pipeline/packages/ffmpeg_web_worktree` | git worktree of that repo |
+| **Live web UI (what users run)** | `/mnt/studio/pipeline/packages/ffmpeg_web_bundle` | Separate git repo: `github.com/georgeantonopoulos-bcnvisuals/ffmpeg_web_bundle`. AYON runs its `run.sh`. |
+| **Edit here to change it** | `/mnt/studio/pipeline/packages/ffmpeg_web_worktree` | git worktree of that repo (has its own `AGENTS.md`) |
 | **Deploy script** | `ffmpeg_web_worktree/sync_to_bundle.sh` | rsyncs `packages/ffmpeg_web/1.0.0/{python,bin,lib}` into the live bundle |
-| **This dev repo** | `/mnt/production/user/.../DEV/ffmpeg_convert` | Different lineage; `ffmpeg_web_bundle/` here is a local build artifact only |
-| **Tkinter app (legacy)** | rez pkg `ffmpeg_UI`, via `ayon/launch_scripts/launch_ffmpeg_ui.sh` | Superseded by the web UI. Its deployed copy is months behind this repo. |
+| **This dev repo** | `/mnt/production/user/.../DEV/ffmpeg_convert` | Different lineage of `ffmpeg_web/`; a staging area, not a deploy source |
 
 **The two web lineages have diverged.** The studio worktree carries features this
 repo lacks (CUDA/NVENC via `hwupload_cuda`, VLC playback, open-output-folder,
-`static/images/`). **Never rsync this repo over the worktree** — port changes into
+reveal-in-folder). **Never rsync this repo over the worktree** — port changes into
 it and reconcile by hand.
 
-Note the launcher named `launch_ffmpeg_ui.sh` starts the *legacy Tkinter* app, not
-the web UI. Do not infer which app is current from a script's name.
+Do not infer which app is current from a script's name: `launch_ffmpeg_ui.sh`
+starts the *legacy Tkinter* app, and AYON's web-UI entry is configured inside AYON
+itself, so grepping `ayon/launch_scripts/` for `ffmpeg_web` finds nothing.
 
-### Current Challenges
-1. **Rez & SMB2 Symlink Limitation**: The current Rez-based setup relies on filesystem symbolic links for package resolution. SMB2 network shares (especially when configured for cross-platform compatibility) often do not support symlinks, causing Rez envs to fail.
-2. **Dependency Complexity**: The app requires specific versions of FFmpeg and OpenImageIO libraries. Relying on "host" libraries across different machines (Rocky 9.4, Rocky 9.6, Ubuntu, etc.) leads to `libOpenImageIO.so` not found or GLIBC version mismatch errors.
-3. **Apptainer Hybrid Failure**: Previous attempts to use Apptainer failed likely because they tried to mount host-specific Rez packages (built for Rocky 9) into an Ubuntu-based container environment.
-
----
-
-## 2. Known Issues & Fixes
-
-### TCL Theme Loading Errors (Fixed Dec 2025)
-
-**Symptoms:**
-- `_tkinter.TclError` when loading `rounded_buttons.tcl` or `dark_theme.tcl`
-- Segmentation fault when launching via `launch_ffmpeg_UI.sh`
-- Error: `no files matched glob pattern "*.png"`
-- Error: `can't find package ttk::theme::dark`
-
-**Root Cause:**
-The original TCL theme files attempted to load PNG button images, but the Tk installation from the `tkinter_libs` Rez package does not include the `Img` extension needed for PNG support. Tk 8.6 only natively supports GIF and PPM/PGM formats.
-
-The `dark_theme.tcl` had two issues:
-1. Line 21: `LoadImages [file join [file dirname [info script]] dark]` tried to load PNGs from a non-existent `dark/` subdirectory
-2. The theme creation referenced `$I(button-normal)` etc., but these image arrays were never populated
-
-**Solution:**
-Rewrote `dark_theme.tcl` to use Tk's native `clam` theme as a parent and style it with colors only (no custom images). This approach:
-- Works with any Tk 8.6 installation
-- Doesn't require the `Img` package or external image files
-- Provides a clean dark theme appearance
-
-**Files Modified:**
-- `dark_theme.tcl`: Complete rewrite using color-based styling only
-- `rounded_buttons.tcl`: Converted to no-op placeholder for compatibility
+When a deployed change seems missing, first ask whether the user sees a **browser
+tab** (web UI) or a **desktop window** (legacy Tkinter), then rule out a cached
+`index.html` before re-syncing.
 
 ---
 
-## 3. Proposed Deployment Solutions
+## 2. Web UI overview
 
-### Option 1: Standalone Binary (PyInstaller / Nuitka) - *Recommended*
-This approach bundles the Python interpreter, all required modules, and even the `ffmpeg`/`oiiotool` binaries into a single executable file.
+A browser-based UI for **FFmpeg** tailored to studio delivery: **ACES** colour
+conversion of EXR sequences, image-sequence handling, and ProRes / H.264 / H.265
+encoding.
 
-- **How it works**: At runtime, the executable extracts its contents to a local temporary directory (e.g., `/tmp/_MEIxxxx`). Since `/tmp` is a local Linux filesystem, it supports symlinks and high-speed I/O.
-- **Why it solves the problem**: 
-    - No symlinks are stored on the SMB share.
-    - All dependencies are bundled; the user doesn't need Python or Rez installed.
-    - It works across any machine sharing the same base OS architecture (e.g., any Rocky 9 or RHEL-based workstation).
-- **Implementation Note**: You would use a `spec` file to include the data files (`.tcl`) and binaries (`ffmpeg`, `oiiotool`, and their `.so` libraries).
-
-### Option 2: Apptainer "Fat" Image (SIF)
-Create a fully self-contained Apptainer image (`.sif`) that includes every dependency inside the container.
-
-- **How it works**: Instead of binding `/mnt/studio/pipeline/packages` (Rez), the build process `apt-get` or `dnf` installs FFmpeg and OIIO directly into the image.
-- **Why it solves the problem**:
-    - A `.sif` file is a single flat file on the SMB share. 
-    - The internal squashfs filesystem handles symlinks perfectly.
-    - It provides a 100% predictable environment regardless of the host machine's library state.
-- **Requirement**: Client machines must have `apptainer` installed.
-
-### Option 3: Portable Environment "Bundle" (Conda-Pack / Venv-Pack)
-Create a relocatable directory containing a full Python environment and all binaries, but with symlinks replaced by actual files.
-
-- **How it works**: Use a tool like `conda-pack` with the `--no-pyc` and careful handling to ensure no symlinks exist in the final folder.
-- **Why it solves the problem**: Allows running directly from the share without extraction.
-- **Cons**: Extremely difficult to maintain, as many Python libraries and system `.so` files rely on symlink chains (e.g., `libfoo.so -> libfoo.so.1`). **Not recommended** for SMB2 shares due to this fragility.
-
----
-
-## 4. Comparison Matrix
-
-| Feature | PyInstaller (Binary) | Apptainer (Fat SIF) | Portable Folder |
-| :--- | :--- | :--- | :--- |
-| **SMB2 Compatible** | Yes (Single File) | Yes (Single File) | No (Symlink issues) |
-| **Zero-Install** | Yes | No (Needs Apptainer) | Yes |
-| **Isolation** | High | Very High | Medium |
-| **Maintenance** | Re-build on update | Re-build on update | Manual File Sync |
-| **Performance** | Slight extraction delay | Native Speed | Native Speed |
-
----
-
-## 5. Final Recommendation
-
-**Option 1 (PyInstaller One-File)** is the most versatile solution for a studio SMB share. It removes the need for Rez entirely and delivers a "click-and-run" experience for all users regardless of their local machine configuration.
-
----
-
-## 6. File Structure (High-Level)
+- **Backend** — `ffmpeg_web/main.py` (FastAPI, served by uvicorn):
+  - `/api/settings` (GET/POST): shared JSON settings.
+  - `/api/browse`, `/api/scan`: server-side file browser and `clique` sequence detection.
+  - `/api/convert`, `/api/cancel`, `/api/cleanup`: conversion jobs and EXR temp cleanup.
+  - `/api/deps`: dependency health (`oiiotool`, `clique`) via `core/deps.py`.
+  - WebSocket `/ws/status`: streams FFmpeg/EXR logs and progress.
+- **Frontend** — `ffmpeg_web/static/` (`index.html`, `style.css`, `js/api.js`, `js/ui.js`).
+- **External tools** — FFmpeg, OpenImageIO `oiiotool`, OCIO config at
+  `/mnt/studio/config/ocio/aces_1.2/config.ocio`. In the live bundle these ship in
+  `packages/ffmpeg_web/1.0.0/{bin,lib}`.
 
 ```
-ffmpeg_convert/
-├── ffmpeg_ui.py              # Tkinter GUI entry point
-├── ffmpeg_converter.py       # Legacy/experimental Qt-based converter
-├── dark_theme.tcl            # TTK dark theme (color-only, no images)
-├── rounded_buttons.tcl       # Placeholder for compatibility
-├── launch_ffmpeg_UI.sh       # Rez environment launcher (legacy, Tkinter)
-├── launch_ffmpeg_ui.py       # Python-based Rez launcher (Tkinter)
-├── ffmpeg_settings.json      # Shared user settings persistence
-├── ffmpeg_web/               # FastAPI + web frontend implementation
-│   ├── main.py               # FastAPI app, WebSocket, job manager
-│   ├── config.py             # Settings load/save helpers
-│   ├── core/
-│   │   ├── ffmpeg_handler.py # FFmpeg command building/execution
-│   │   ├── exr_handler.py    # EXR → PNG via oiiotool + OCIO
-│   │   ├── explorer.py       # File browser + clique sequence detection
-│   │   ├── reformat.py       # Output resolution: probe, aspect math, filter settings
-│   │   └── deps.py           # Dependency health checks (/api/deps)
-│   └── static/
-│       ├── index.html        # Single-page web UI
-│       ├── style.css         # Dark, modern styling
-│       └── js/
-│           ├── api.js        # REST/WebSocket API helpers
-│           └── ui.js         # UI logic, logs, file browser, controls
-└── tmp_files/                # Temporary conversion files (Tkinter flow)
+ffmpeg_web/
+├── main.py               # FastAPI app, WebSocket, job manager
+├── config.py             # Settings load/save helpers
+├── core/
+│   ├── ffmpeg_handler.py # FFmpeg command building/execution
+│   ├── exr_handler.py    # EXR → PNG via oiiotool + OCIO
+│   ├── explorer.py       # File browser + clique sequence detection
+│   ├── reformat.py       # Output resolution: probe, aspect math, filter settings
+│   ├── version.py        # Build stamp / stale-code detection
+│   └── deps.py           # Dependency health checks (/api/deps)
+├── static/               # index.html, style.css, js/, images/
+└── test_*.py             # Framework-free test suites (plain asserts)
 ```
+
+### Tests
+
+Three copies of `ffmpeg_web` exist on disk (this repo, worktree, bundle) and Python
+will silently import the wrong one. Run suites with `python -m ffmpeg_web.test_<name>`
+from the lineage's own directory, and **assert `ffmpeg_web.__file__`** points at the
+lineage you mean before trusting a result. `test_api` needs a running server; the
+rest (`test_codec`, `test_reformat`, `test_explorer`, `test_colorspace`,
+`test_version`, `test_cache`) do not.
 
 ---
 
-## 7. Development Journal
+## 3. Development journal (web UI)
 
-### Dec 24, 2025: Nuitka Standalone Deployment (In Progress)
-- **Goal**: Create a single-file executable that bundles Python, Tkinter, OIIO, and FFmpeg.
-- **Approach**: Running Nuitka `--standalone --onefile` inside a `rez-env` shell. This is necessary because Nuitka's `tk-inter` plugin requires the `tkinter` module to be detected as part of the primary Python installation, which Rez manages via environment variables.
-- **Progress**: 
-    - Installed `nuitka`, `zstandard`, `clique`, and `patchelf` in the user's `.local` directory.
-    - Modified `ffmpeg_ui.py` with `get_resource_path()` helper to correctly resolve bundled data files (themes, icons).
-    - Current build is resolving and compiling dependencies from the `openimageio`, `opencolorio`, `tkinter`, and `clique` Rez packages.
+### Feb 2026: FastAPI Web UI port
+Browser UI mirroring the old Tkinter workflow, local-only and studio-friendly.
+Replaced the Tkinter app, which is now legacy.
 
-### Feb 2026: FastAPI Web UI Port (In Progress)
-- **Goal**: Provide a browser-based UI that mirrors the Tkinter workflow while remaining local-only and studio-friendly.
-- **Backend**:
-  - `ffmpeg_web/main.py` exposes REST endpoints:
-    - `/api/settings` (GET/POST): shared JSON settings.
-    - `/api/browse` and `/api/scan`: server-side file browser and `clique`-based sequence detection.
-    - `/api/convert`, `/api/cancel`, `/api/cleanup`: manage conversion jobs and EXR temp cleanup.
-    - `/api/deps`: reports dependency health (notably `oiiotool` and `clique`) using `core/deps.py`.
-  - WebSocket `/ws/status` streams FFmpeg/EXR logs and progress to the browser.
-- **Frontend**:
-  - `ffmpeg_web/static/index.html` + `style.css` + `js/` implement a dark, modern layout with:
-    - Input/output settings, codec options, and duration controls.
-    - A modal server-side file browser for sequence selection.
-    - A terminal-style log window and progress bar driven by WebSocket updates.
-    - A dependency warning banner that disables conversion if critical tools are missing.
+### Aug 2026: Output reformat (resolution) support
+- **UI**: `Reformat Resolution` checkbox in *Output Settings*, off by default;
+  reveals Width/Height (blank = derived from source aspect). Live hint shows
+  `Source: W x H -> Output: W x H`.
+- **EXR** sequences resize inside the `oiiotool` pre-pass with
+  `--resize:filter=lanczos3:highlightcomp=1`, after `--ch R,G,B` and **before**
+  `--colorconvert`, so filtering happens on scene-linear ACEScg float;
+  `highlightcomp` stops bright HDR pixels ringing into dark halos.
+- **Everything else** extends the existing trailing `scale` filter with
+  `w=..:h=..:flags=lanczos+accurate_rnd+full_chroma_int` — one swscale pass, not two.
+- **Double-resize guard**: the EXR pre-pass clears `reformat_enabled` after
+  pointing the job at its temp PNGs.
+- **Even dimensions**: sizes round *up* to even (`yuv420p` needs it).
+- **Source resolution** is probed with `oiiotool --info` (fallback `ffmpeg -i`);
+  the backend always re-probes and never trusts client numbers.
 
-### Aug 2026: Output Reformat (Resolution) Support
-- **Goal**: Let a conversion output any resolution without softening the image
-  or introducing aliasing.
-- **UI**: A `Reformat Resolution` checkbox in *Output Settings*, off by default.
-  Ticking it reveals Width and Height fields; leaving either blank derives it
-  from the source aspect ratio. A live hint shows `Source: W x H -> Output: W x H`.
-- **Two resize paths**, chosen by input type:
-  - **EXR** sequences resize inside the existing `oiiotool` pre-pass, via
-    `--resize:filter=lanczos3:highlightcomp=1`, inserted after `--ch R,G,B` and
-    **before** `--colorconvert`. Filtering therefore happens on scene-linear
-    ACEScg float, ahead of the sRGB transform and 8-bit quantisation;
-    `highlightcomp` prevents bright HDR pixels ringing into dark halos.
-  - **Everything else** extends the *existing* trailing `scale` filter (which
-    previously only tagged the BT.709 matrix) with
-    `w=..:h=..:flags=lanczos+accurate_rnd+full_chroma_int`, so a reformat costs
-    one swscale pass rather than adding a second.
-- **Double-resize guard**: the EXR pre-pass mutates the job config to point at
-  its temp PNGs; it now also clears `reformat_enabled`, so FFmpeg does not
-  resample frames oiiotool already resized.
-- **Even dimensions**: all sizes are rounded *up* to even. `yuv420p` subsamples
-  chroma 2:1 in both axes, so an odd dimension is a hard encoder failure.
-- **Source resolution** is probed with `oiiotool --info` (header-only read,
-  falling back to `ffmpeg -i`). `/api/scan` returns it per sequence so the UI can
-  preview the derived dimension; the backend always re-probes and never trusts
-  the client's numbers.
-- **Tests**: `python -m ffmpeg_web.test_reformat` (23 cases, no server or test
-  framework required).
+### Sep 2026
+- ACES output transform choice (sRGB or Rec.709).
+- H.264 level declared correctly; user-selectable level (5.0 / 5.1 / 6.1).
+- Encoder settings shown in the UI; stale running code detected via `core/version.py`.
+- UI modernised; BCN logo restored (the logo originates in the studio lineage).
