@@ -42,6 +42,12 @@ OIIO_RESIZE_ARG = "--resize:filter=lanczos3:highlightcomp=1"
 # oiiotool --info prints e.g. "plate.exr : 2048 x  858, 3 channel, half openexr"
 _OIIO_INFO_RE = re.compile(r":\s*(\d+)\s*x\s*(\d+)\b")
 
+# That headline is the *data* window.  EXRs rendered with a bounding box
+# store a smaller data window inside the frame, and only ``--info -v``
+# prints the frame itself: "full/display size: 7680 x 2160".  The line
+# is omitted when both windows match, so the headline is the fallback.
+_OIIO_DISPLAY_RE = re.compile(r"full/display size:\s*(\d+)\s*x\s*(\d+)\b")
+
 # ffmpeg -i prints e.g. "Stream #0:0: Video: png, rgb24(pc), 2048x858, 25 fps"
 _FFMPEG_SIZE_RE = re.compile(r"\b(\d{2,})x(\d{2,})\b")
 
@@ -109,8 +115,12 @@ def resolve_dimensions(
 
 
 def parse_oiiotool_info(text: str) -> Optional[Tuple[int, int]]:
-    """Extract ``(width, height)`` from ``oiiotool --info`` output."""
-    match = _OIIO_INFO_RE.search(text)
+    """Extract ``(width, height)`` from ``oiiotool --info -v`` output.
+
+    Returns the full/display window when one is printed, since that is
+    the frame being delivered, and the data window otherwise.
+    """
+    match = _OIIO_DISPLAY_RE.search(text) or _OIIO_INFO_RE.search(text)
     if not match:
         return None
     return int(match.group(1)), int(match.group(2))
@@ -134,7 +144,7 @@ def parse_ffmpeg_stderr(text: str) -> Optional[Tuple[int, int]]:
 def probe_resolution(path: str) -> Optional[Tuple[int, int]]:
     """Read the pixel dimensions of a single image file.
 
-    Prefers ``oiiotool --info`` (a header-only read that understands EXR,
+    Prefers ``oiiotool --info -v`` (a header-only read that understands EXR,
     PNG, TIFF and JPEG alike) and falls back to ``ffmpeg -i``.  Returns
     ``None`` rather than raising if the file is missing or neither tool
     can read it -- callers treat an unknown source size as "cannot derive
@@ -145,7 +155,7 @@ def probe_resolution(path: str) -> Optional[Tuple[int, int]]:
 
     try:
         result = subprocess.run(
-            ["oiiotool", "--info", path],
+            ["oiiotool", "--info", "-v", path],
             capture_output=True,
             text=True,
             timeout=10,

@@ -117,6 +117,24 @@ def test_parse_oiiotool_info_reads_dimensions() -> None:
     assert reformat.parse_oiiotool_info(line) == (2048, 858)
 
 
+def test_parse_oiiotool_info_prefers_display_window() -> None:
+    """A cropped data window must not be reported as the frame size.
+
+    EXRs rendered with a bounding box store only the pixels that hold
+    data; the headline ``W x H`` is that data window.  The frame the
+    user delivers is the full/display window, printed only by ``-v``.
+    """
+    text = (
+        "Reading dw.1001.exr\n"
+        "dw.1001.exr          : 7680 x 1635, 3 channel, half openexr\n"
+        "    channel list: R, G, B\n"
+        "    pixel data origin: x=0, y=262\n"
+        "    full/display size: 7680 x 2160\n"
+        "    full/display origin: 0, 0\n"
+    )
+    assert reformat.parse_oiiotool_info(text) == (7680, 2160)
+
+
 def test_parse_oiiotool_info_ignores_unrelated_output() -> None:
     """Garbage in must not produce a bogus resolution."""
     assert reformat.parse_oiiotool_info("oiiotool ERROR: could not open") is None
@@ -153,6 +171,26 @@ def test_probe_resolution_reads_a_real_image() -> None:
             capture_output=True,
         )
         assert reformat.probe_resolution(path) == (2048, 858)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_probe_resolution_uses_display_window_of_cropped_exr() -> None:
+    """A real EXR whose data window is smaller than its display window."""
+    if not shutil.which("oiiotool"):
+        print("      (skipped: oiiotool not on PATH)")
+        return
+
+    tmp_dir = tempfile.mkdtemp(prefix="ffmpeg_web_probe_")
+    try:
+        path = os.path.join(tmp_dir, "cropped.exr")
+        subprocess.run(
+            ["oiiotool", "--create", "7680x2160", "3",
+             "--crop", "7680x1635+0+262", "-d", "half", "-o", path],
+            check=True,
+            capture_output=True,
+        )
+        assert reformat.probe_resolution(path) == (7680, 2160)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -232,10 +270,12 @@ def main() -> None:
         ("non-positive dimension errors", test_non_positive_dimension_is_an_error),
         ("single dimension needs source", test_single_dimension_without_source_resolution_is_an_error),
         ("parse oiiotool --info", test_parse_oiiotool_info_reads_dimensions),
+        ("parse oiiotool display window", test_parse_oiiotool_info_prefers_display_window),
         ("parse oiiotool garbage", test_parse_oiiotool_info_ignores_unrelated_output),
         ("parse ffmpeg stderr", test_parse_ffmpeg_stderr_reads_dimensions),
         ("parse ffmpeg non-dimensions", test_parse_ffmpeg_stderr_ignores_non_dimension_numbers),
         ("probe a real image", test_probe_resolution_reads_a_real_image),
+        ("probe cropped EXR", test_probe_resolution_uses_display_window_of_cropped_exr),
         ("probe missing file", test_probe_resolution_returns_none_for_missing_file),
         ("filter chain no reformat", test_filter_chain_without_reformat_keeps_colour_matrix_only),
         ("filter chain with reformat", test_filter_chain_with_reformat_adds_size_and_lanczos),
