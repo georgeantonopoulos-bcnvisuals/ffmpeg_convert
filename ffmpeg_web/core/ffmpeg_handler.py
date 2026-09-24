@@ -262,6 +262,111 @@ class FFmpegJobConfig(BaseModel):
     reformat_width: Optional[int] = None
     reformat_height: Optional[int] = None
 
+def resolve_reformat_size(
+    config: "FFmpegJobConfig",
+    log: Optional[Callable[[str, str], None]] = None,
+) -> Optional[Tuple[int, int]]:
+    """Work out the target pixel size for a job, or None if disabled.
+
+    The source resolution is probed from the job's own first frame --
+    never taken from the client -- so the size the encoder gets is
+    always derived from the pixels it is about to read.
+
+    If probing fails but only one dimension was requested, ffmpeg's
+    own ``-2`` sentinel handles the aspect ratio for us, so a probe
+    failure degrades instead of aborting the job.
+
+    Raises:
+        reformat.ReformatError: if the request cannot be satisfied.
+    """
+    log = log or (lambda _kind, _msg: None)
+    if not config.reformat_enabled:
+        return None
+
+    first_frame = reformat.first_frame_path(
+        config.input_folder, config.filename_pattern, config.start_frame
+    )
+    source = reformat.probe_resolution(first_frame)
+
+    if source is None:
+        if config.reformat_width and not config.reformat_height:
+            log('output', "Could not probe the source resolution; letting FFmpeg "
+                "derive the height from the source aspect ratio.\n")
+            return reformat.even(config.reformat_width), -2
+        if config.reformat_height and not config.reformat_width:
+            log('output', "Could not probe the source resolution; letting FFmpeg "
+                "derive the width from the source aspect ratio.\n")
+            return -2, reformat.even(config.reformat_height)
+
+    source_width, source_height = source if source else (None, None)
+    size = reformat.resolve_dimensions(
+        config.reformat_width,
+        config.reformat_height,
+        source_width,
+        source_height,
+    )
+    if source:
+        log('output', f"Reformatting {source_width}x{source_height} -> "
+            f"{size[0]}x{size[1]} (lanczos).\n")
+    return size
+
+
+def build_video_args(
+    config: "FFmpegJobConfig",
+    plan: timing.TimingPlan,
+    reformat_size: Optional[Tuple[int, int]],
+    gpu_caps: dict,
+) -> Tuple[List[str], Dict[str, object]]:
+    """Build the video half of the encode command, from ``-fps_mode`` on.
+
+    Covers the filter chain, pixel format, codec and colour tags -- all of
+    the command that decides what the pictures cost in bytes.  The job and
+    the size estimate's sample encode both build from here, so an estimate
+    cannot measure a different encode from the one the job runs.
+
+    ``gpu_caps`` is accepted for parity with the studio lineage; this
+    lineage has no NVENC path, so every codec encodes on the CPU.
+    """
+    output_pix_fmt = PIX_FMT_8BIT
+    video_codec_params: List[str] = []
+    codec_lib = "unknown"
+
+    if config.codec in BITRATE_CODECS:
+        codec_lib, _ = select_encoder(config.codec, {})
+        video_codec_params, output_pix_fmt = build_bitrate_codec_params(
+            config.codec, codec_lib, False, config.mp4_bitrate, config.level
+        )
+    elif config.codec.startswith("prores"):
+        codec_lib = "prores_ks"
+        video_codec_params = [
+            "-c:v", "prores_ks",
+            "-profile:v", str(config.prores_profile),
+            "-qscale:v", str(config.prores_qscale),
+        ]
+    elif config.codec == "qtrle":
+        codec_lib = "qtrle"
+        output_pix_fmt = "rgb24"
+        video_codec_params = ["-c:v", "qtrle"]
+
+    # NTSC exact length: the last frame is shortened in a stream-copy
+    # remux after the encode (see timing.trim_last_frame_bsf), which
+    # needs display order == decode order, i.e. no B-frames.
+    if plan.last_frame_ticks is not None and config.codec in BITRATE_CODECS:
+        video_codec_params += ["-bf", "0"]
+
+    args = [
+        "-fps_mode", "cfr",
+        "-vf", build_video_filter_chain(plan, reformat_size),
+        "-pix_fmt", output_pix_fmt,
+        "-video_track_timescale", str(timing.track_timescale(plan.output_fps)),
+        *video_codec_params,
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
+        "-colorspace", "bt709",
+    ]
+    return args, {"encoder": codec_lib, "nvenc": False, "cuda_filters": False}
+
+
 class FFmpegHandler:
     def __init__(self, log_callback: Callable[[str, str], None]):
         """
@@ -276,55 +381,8 @@ class FFmpegHandler:
     def _resolve_reformat_size(
         self, config: FFmpegJobConfig
     ) -> Optional[Tuple[int, int]]:
-        """Work out the target pixel size for this job, or None if disabled.
-
-        The source resolution is probed from the job's own first frame --
-        never taken from the client -- so the size the encoder gets is
-        always derived from the pixels it is about to read.
-
-        If probing fails but only one dimension was requested, ffmpeg's
-        own ``-2`` sentinel handles the aspect ratio for us, so a probe
-        failure degrades instead of aborting the job.
-        """
-        if not config.reformat_enabled:
-            return None
-
-        first_frame = reformat.first_frame_path(
-            config.input_folder, config.filename_pattern, config.start_frame
-        )
-        source = reformat.probe_resolution(first_frame)
-
-        if source is None:
-            if config.reformat_width and not config.reformat_height:
-                self.log_callback(
-                    'output',
-                    "Could not probe the source resolution; letting FFmpeg "
-                    "derive the height from the source aspect ratio.\n",
-                )
-                return reformat.even(config.reformat_width), -2
-            if config.reformat_height and not config.reformat_width:
-                self.log_callback(
-                    'output',
-                    "Could not probe the source resolution; letting FFmpeg "
-                    "derive the width from the source aspect ratio.\n",
-                )
-                return -2, reformat.even(config.reformat_height)
-
-        source_width, source_height = source if source else (None, None)
-        size = reformat.resolve_dimensions(
-            config.reformat_width,
-            config.reformat_height,
-            source_width,
-            source_height,
-        )
-
-        if source:
-            self.log_callback(
-                'output',
-                f"Reformatting {source_width}x{source_height} -> "
-                f"{size[0]}x{size[1]} (lanczos).\n",
-            )
-        return size
+        """Work out the target pixel size for this job, logging the choice."""
+        return resolve_reformat_size(config, self.log_callback)
 
     def run_ffmpeg(self, config: FFmpegJobConfig):
         """Build and execute FFmpeg command."""
@@ -388,67 +446,29 @@ class FFmpegHandler:
 
         cmd += blank_audio_input_args
 
-        # Filters
-        cmd += ["-fps_mode", "cfr"]
-
+        # Resolve the reformat target before any encoding starts, so a bad
+        # request aborts early.
         try:
             reformat_size = self._resolve_reformat_size(config)
         except reformat.ReformatError as exc:
             self.log_callback('error', str(exc))
             return
 
-        ffmpeg_filters_str = build_video_filter_chain(plan, reformat_size)
-        cmd += ["-vf", ffmpeg_filters_str]
+        # Video: codec, filter chain and colour tags (shared with the size
+        # estimate, so a sample encode is the job's own command).
+        if config.codec in BITRATE_CODECS and not config.mp4_bitrate:
+            self.log_callback('error', "Bitrate required for H.264/H.265/High 10")
+            return
+        if config.codec.startswith("prores") and not (
+            config.prores_profile and config.prores_qscale
+        ):
+            self.log_callback('error', "ProRes profile and quality required")
+            return
 
-        # Codec & Pixel Format
-        output_pix_fmt = "yuv420p"
-        video_codec_params = []
-        
-        if config.codec in BITRATE_CODECS:
-            if not config.mp4_bitrate:
-                self.log_callback('error', "Bitrate required for H.264/H.265/High 10")
-                return
-
-            # This lineage has no NVENC path; High 10 is CPU-only regardless.
-            codec_lib, _ = select_encoder(config.codec, {})
-            video_codec_params, output_pix_fmt = build_bitrate_codec_params(
-                config.codec, codec_lib, False, config.mp4_bitrate, config.level
-            )
-
-        elif config.codec.startswith("prores"):
-            if not config.prores_profile or not config.prores_qscale:
-                 self.log_callback('error', "ProRes profile and quality required")
-                 return
-            
-            video_codec_params = [
-                "-c:v", "prores_ks",
-                "-profile:v", config.prores_profile,
-                "-qscale:v", config.prores_qscale
-            ]
-        elif config.codec == "qtrle":
-             output_pix_fmt = "rgb24"
-             video_codec_params = ["-c:v", "qtrle"]
-        
-        cmd += [
-            "-pix_fmt", output_pix_fmt,
-            "-video_track_timescale", str(timing.track_timescale(output_fps))
-        ]
-        
-        # NTSC exact length: the last frame is shortened in a stream-copy
-        # remux after the encode (see timing.trim_last_frame_bsf), which
-        # needs display order == decode order, i.e. no B-frames.
+        video_args, _info = build_video_args(config, plan, reformat_size, {})
         trim = plan.last_frame_ticks is not None
-        if trim and config.codec in BITRATE_CODECS:
-            video_codec_params += ["-bf", "0"]
-
         cmd += output_audio_handling_args
-        cmd += video_codec_params
-        
-        cmd += [
-            "-color_primaries", "bt709",
-            "-color_trc", "bt709",
-            "-colorspace", "bt709"
-        ]
+        cmd += video_args
 
         if total_frames_needed:
             cmd += ["-frames:v", str(total_frames_needed)]

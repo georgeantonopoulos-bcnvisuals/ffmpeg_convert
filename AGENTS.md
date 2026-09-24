@@ -83,6 +83,7 @@ ffmpeg_web/
 │   ├── explorer.py       # File browser + clique sequence detection
 │   ├── reformat.py       # Output resolution: probe, aspect math, filter settings
 │   ├── timing.py         # Frame rates, exact durations, retime (Fraction maths)
+│   ├── size_estimate.py  # Output file-size estimate (/api/estimate)
 │   ├── version.py        # Build stamp / stale-code detection
 │   └── deps.py           # Dependency health checks (/api/deps)
 ├── static/               # index.html, style.css, js/, images/
@@ -96,7 +97,7 @@ will silently import the wrong one. Run suites with `python -m ffmpeg_web.test_<
 from the lineage's own directory, and **assert `ffmpeg_web.__file__`** points at the
 lineage you mean before trusting a result. `test_api` needs a running server; the
 rest (`test_codec`, `test_reformat`, `test_explorer`, `test_colorspace`,
-`test_version`, `test_cache`, `test_timing`) do not.
+`test_version`, `test_cache`, `test_timing`, `test_size_estimate`) do not.
 
 ---
 
@@ -144,3 +145,22 @@ Replaced the Tkinter app, which is now legacy.
     the declared rate stays `30000/1001`.
   Out-of-home specs like "15 s at 29.97" need this; do not tell the user
   it is impossible.
+- **Output file-size estimate** (`core/size_estimate.py`, `POST /api/estimate`,
+  *Estimated File Size* box in *Encoding & Color*). Every estimate states its
+  kind, because rate control decides what is knowable:
+  - **Exact** — libx264 (H.264, High 10). `nal-hrd=cbr` pads with filler, so
+    size is independent of the picture (flat grey and noise measure the same
+    to the byte): `R·T/8 − 0.1·bufsize/8` (x264's VBV starts 90% full) plus
+    ~2 KB + 12 B/frame of MP4 index. `T` is the *encoded* frames' duration —
+    at NTSC the trim remux is a stream copy and removes no bytes.
+  - **Upper bound** — libx265 (ignores `-minrate`: flat grey came out 44 KB
+    against 37.5 MB) and NVENC.
+  - **Measured** — ProRes (`-qscale`) and QTRLE have no formula. On demand the
+    backend sample-encodes windows spread evenly across the sequence (24 single
+    frames for ProRes, 6 twelve-frame GOPs for QTRLE) using
+    `ffmpeg_handler.build_video_args` — the same builder the job uses — and,
+    for EXR, the job's own oiiotool command. The range is ±2 standard errors
+    from the successive-difference estimator. Verified: 0.0–0.5% on uniform
+    content, 2.5–8% on deliberately mixed content, real file always in range.
+  - "Blank Audio Track" is silence, which ffmpeg's AAC encodes as 6-byte
+    packets whatever `-b:a` says, so it adds ~16 B/packet, not 128 kb/s.

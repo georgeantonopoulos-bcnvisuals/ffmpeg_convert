@@ -1,5 +1,6 @@
 import os
 import asyncio
+import subprocess
 import json
 import logging
 import threading
@@ -10,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from . import config
-from .core import explorer, reformat
+from .core import explorer, reformat, size_estimate
 from .core.deps import check_dependencies
 from .core import version
 from .core.ffmpeg_handler import (
@@ -359,6 +360,27 @@ async def api_codec_info(level: Optional[str] = None) -> Any:
     encoder would be told.
     """
     return {c: describe_codec(c, level=level) for c in UI_CODECS}
+
+
+class EstimateRequest(FFmpegJobConfig):
+    # ProRes/QTRLE only: run the sample encode (takes seconds).
+    sample: bool = False
+
+
+@app.post("/api/estimate")
+async def api_estimate(request: EstimateRequest) -> Any:
+    """Estimate the output file size for a job (see core/size_estimate.py).
+
+    Runs in a worker thread: a sample encode shells out to ffmpeg (and
+    oiiotool for EXR) and must not stall the event loop that streams the
+    running job's log.
+    """
+    try:
+        return await asyncio.to_thread(
+            size_estimate.estimate, request, request.sample
+        )
+    except (ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/api/settings")

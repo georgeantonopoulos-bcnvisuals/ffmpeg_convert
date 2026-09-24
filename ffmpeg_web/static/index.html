@@ -200,6 +200,25 @@
                                 <option value="Blank Audio Track">Blank Audio Track (anullsrc)</option>
                             </select>
                         </div>
+
+                        <!-- Output file-size estimate (see core/size_estimate.py) -->
+                        <div class="form-group full-width size-estimate" id="size-estimate">
+                            <div class="size-estimate-head">
+                                <span class="size-estimate-title">Estimated File Size</span>
+                                <span id="size-estimate-kind" class="size-kind hidden"></span>
+                            </div>
+                            <div class="size-estimate-body">
+                                <div class="size-estimate-figure">
+                                    <span id="size-estimate-value" class="size-value">&mdash;</span>
+                                    <span id="size-estimate-range" class="size-range"></span>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm hidden" id="size-estimate-btn">
+                                    Measure (sample encode)
+                                </button>
+                            </div>
+                            <p id="size-estimate-method" class="size-method">Select a sequence to estimate the output size.</p>
+                            <div id="size-estimate-breakdown" class="size-breakdown"></div>
+                        </div>
                     </div>
                 </section>
 

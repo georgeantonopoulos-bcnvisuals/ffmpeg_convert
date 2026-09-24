@@ -7,6 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import reformat
 
+# Studio ACES 1.2 config, and the colour space EXR renders are written in.
+OCIO_CONFIG = "/mnt/studio/config/ocio/aces_1.2/config.ocio"
+EXR_COLOR_SPACE = "ACES - ACEScg"
+
 
 def build_frame_command(
     input_file: str,
@@ -55,15 +59,14 @@ class ExrHandler:
         self.temp_dir = ""
         self.active_processes = []
         
-        # Hardcoded from original script
-        self.ocio_config = "/mnt/studio/config/ocio/aces_1.2/config.ocio"
+        self.ocio_config = OCIO_CONFIG
 
     def convert_exr_sequence(self, 
                            input_folder: str, 
                            pattern: str, 
                            start_frame: int, 
                            end_frame: int,
-                           color_space: str = "ACES - ACEScg",
+                           color_space: str = EXR_COLOR_SPACE,
                            size: Optional[Tuple[int, int]] = None,
                            bit_depth: str = "uint8",
                            output_transform: str = "Output - sRGB") -> str:

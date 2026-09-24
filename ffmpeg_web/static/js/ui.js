@@ -35,6 +35,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         versionBanner: document.getElementById('version_banner'),
         desiredDuration: document.getElementById('desired_duration'),
         timingHint: document.getElementById('timing-hint'),
+        sizeEstimate: document.getElementById('size-estimate'),
+        sizeKind: document.getElementById('size-estimate-kind'),
+        sizeValue: document.getElementById('size-estimate-value'),
+        sizeRange: document.getElementById('size-estimate-range'),
+        sizeMethod: document.getElementById('size-estimate-method'),
+        sizeBreakdown: document.getElementById('size-estimate-breakdown'),
+        sizeBtn: document.getElementById('size-estimate-btn'),
         audioOption: document.getElementById('audio_option'),
 
         reformatEnabled: document.getElementById('reformat_enabled'),
@@ -121,6 +128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         setupWebSocket();
         await checkDependencies();
         await loadCodecInfo();
+        scheduleEstimate();
         checkVersion();
         
         // Cheap poll plus a check whenever the tab regains focus, so a
@@ -665,6 +673,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function updateSequenceSummaryCard(seq) {
+        scheduleEstimate();
         if (!seq) {
             if (dom.detectedRange) dom.detectedRange.textContent = "None";
             if (dom.detectedFrames) dom.detectedFrames.textContent = "-";
@@ -1002,26 +1011,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     });
 
-    // --- Run Conversion ---
-    dom.runBtn.addEventListener('click', async () => {
-        if (!dom.inputFolder.value || !dom.outputFolder.value) {
-            showToast("Missing Folder", "Please select input and output sequence folders.", "error");
-            return;
-        }
-
-        if (dom.reformatEnabled.checked) {
-            const check = resolveDimensions(
-                parseDimension(dom.reformatWidth),
-                parseDimension(dom.reformatHeight),
-                state.sourceRes.width,
-                state.sourceRes.height
-            );
-            if (check.error) {
-                showToast("Reformat Error", check.error, "error");
-                return;
-            }
-        }
-
+    // The job exactly as Run would send it; the size estimate posts the same.
+    function buildJobConfig() {
         const config = {
             input_folder: dom.inputFolder.value,
             filename_pattern: dom.filenamePattern.value,
@@ -1049,6 +1040,135 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (config.prores_profile === '422_lt') config.prores_profile = '1';
             if (config.prores_profile === '444') config.prores_profile = '4';
         }
+        return config;
+    }
+
+    // --- Output size estimate (maths in core/size_estimate.py) ---
+    const SIZE_KIND_LABELS = {
+        exact: 'Exact',
+        upper_bound: 'Upper bound',
+        measured: 'Measured ±95%',
+    };
+    const SAMPLED_CODECS = ['prores_422', 'prores_422_lt', 'prores_444', 'qtrle'];
+    let estimateSeq = 0;
+    let estimateTimer = null;
+
+    function formatBytes(bytes) {
+        // Decimal MB/GB, as Finder and delivery specs count them.
+        if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`;
+        if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(1)} MB`;
+        return `${(bytes / 1e3).toFixed(1)} KB`;
+    }
+
+    function setEstimateMessage(text, isError = false) {
+        dom.sizeKind.className = 'size-kind hidden';
+        dom.sizeValue.innerHTML = '&mdash;';
+        dom.sizeRange.textContent = '';
+        dom.sizeBreakdown.innerHTML = '';
+        dom.sizeMethod.textContent = text;
+        dom.sizeMethod.classList.toggle('is-error', isError);
+    }
+
+    function renderEstimate(est) {
+        dom.sizeEstimate.classList.remove('is-stale');
+        dom.sizeMethod.classList.remove('is-error');
+        const sampled = SAMPLED_CODECS.includes(dom.codec.value);
+        dom.sizeBtn.classList.toggle('hidden', !sampled);
+        dom.sizeBtn.disabled = false;
+        dom.sizeBtn.textContent = est.kind === 'measured' ? 'Measure again' : 'Measure (sample encode)';
+
+        if (est.kind === 'needs_sample') {
+            setEstimateMessage(
+                `ProRes and QTRLE sizes depend on the picture (${est.frames} frames). ` +
+                'Measure encodes a sample of frames with these exact settings.'
+            );
+            return;
+        }
+        dom.sizeKind.textContent = SIZE_KIND_LABELS[est.kind] || est.kind;
+        dom.sizeKind.className = `size-kind kind-${est.kind}`;
+        dom.sizeValue.textContent = (est.kind === 'upper_bound' ? '≤ ' : '') + formatBytes(est.bytes);
+        dom.sizeRange.textContent = (est.low !== undefined)
+            ? `${formatBytes(est.low)} – ${formatBytes(est.high)}`
+            : `${est.bytes.toLocaleString()} bytes`;
+        dom.sizeMethod.textContent = est.method;
+
+        dom.sizeBreakdown.innerHTML = '';
+        [['Video', est.breakdown.video], ['Audio', est.breakdown.audio],
+         ['Container', est.breakdown.container]]
+            .filter(([, value]) => value > 0)
+            .forEach(([label, value]) => {
+                const chip = document.createElement('span');
+                chip.className = 'spec-chip';
+                chip.textContent = `${label}: ${formatBytes(value)}`;
+                dom.sizeBreakdown.appendChild(chip);
+            });
+    }
+
+    async function requestEstimate(sample) {
+        const seq = ++estimateSeq;
+        if (!dom.inputFolder.value || !dom.filenamePattern.value || !state.frameRange.end) {
+            dom.sizeBtn.classList.add('hidden');
+            setEstimateMessage('Select a sequence to estimate the output size.');
+            return;
+        }
+        if (sample) {
+            dom.sizeBtn.disabled = true;
+            dom.sizeBtn.textContent = 'Measuring…';
+            dom.sizeMethod.textContent = 'Encoding sample frames with the job\'s own settings…';
+        }
+        try {
+            const { res, body } = await API.estimateSize({ ...buildJobConfig(), sample });
+            if (seq !== estimateSeq) return;  // settings changed meanwhile
+            if (!res.ok) {
+                dom.sizeBtn.disabled = false;
+                dom.sizeBtn.textContent = 'Measure (sample encode)';
+                setEstimateMessage(typeof body.detail === 'string' ? body.detail : 'Could not estimate the size: check the settings.', true);
+                return;
+            }
+            renderEstimate(body);
+        } catch (e) {
+            if (seq === estimateSeq) setEstimateMessage('Could not reach the server for an estimate.', true);
+        }
+    }
+
+    // Any setting change invalidates a measured size (grey it until the
+    // new answer lands) and re-runs the instant maths after a short pause.
+    function scheduleEstimate() {
+        estimateSeq++;
+        dom.sizeEstimate.classList.add('is-stale');
+        clearTimeout(estimateTimer);
+        estimateTimer = setTimeout(() => requestEstimate(false), 300);
+    }
+
+    dom.sizeBtn.addEventListener('click', () => requestEstimate(true));
+    [dom.codec, dom.mp4Bitrate, dom.proresQscale, dom.outputFps, dom.sourceFps,
+     dom.desiredDuration, dom.audioOption, dom.outputTransform,
+     dom.reformatEnabled, dom.reformatWidth, dom.reformatHeight].forEach(el => {
+        el.addEventListener('input', scheduleEstimate);
+        el.addEventListener('change', scheduleEstimate);
+    });
+
+    // --- Run Conversion ---
+    dom.runBtn.addEventListener('click', async () => {
+        if (!dom.inputFolder.value || !dom.outputFolder.value) {
+            showToast("Missing Folder", "Please select input and output sequence folders.", "error");
+            return;
+        }
+
+        if (dom.reformatEnabled.checked) {
+            const check = resolveDimensions(
+                parseDimension(dom.reformatWidth),
+                parseDimension(dom.reformatHeight),
+                state.sourceRes.width,
+                state.sourceRes.height
+            );
+            if (check.error) {
+                showToast("Reformat Error", check.error, "error");
+                return;
+            }
+        }
+
+        const config = buildJobConfig();
 
         setConvertingState(true);
         dom.logContainer.innerHTML = '';

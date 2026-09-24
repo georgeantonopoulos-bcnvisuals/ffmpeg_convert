@@ -35,6 +35,16 @@ const API = {
         return await res.json();
     },
 
+    // Returns the response too: a 400 carries the reason in body.detail.
+    async estimateSize(config) {
+        const res = await fetch('/api/estimate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+        return { res, body: await res.json() };
+    },
+
     async cancelConversion() {
         const res = await fetch('/api/cancel', { method: 'POST' });
         return await res.json();
